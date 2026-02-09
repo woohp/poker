@@ -15,12 +15,17 @@
         "@sveltejs/vite-plugin-svelte": "^6.2.1",
         "@tsconfig/svelte": "^5.0.6",
         "@types/node": "^24.10.1",
+        "@types/qrcode": "^1.5.6",
+        "autoprefixer": "^10.4.24",
+        "postcss": "^8.5.6",
         "svelte": "^5.43.8",
         "svelte-check": "^4.3.4",
+        "tailwindcss": "^4.1.18",
         "typescript": "~5.9.3",
         "vite": "^7.2.4"
     },
     "dependencies": {
+        "@tailwindcss/vite": "^4.1.18",
         "peerjs": "^1.5.5",
         "qrcode": "^1.5.4"
     }
