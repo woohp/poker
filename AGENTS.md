@@ -12,16 +12,14 @@ npm run build
 # Preview production build
 npm run preview
 
-# Type checking (MUST run after changes)
+# Type checking / verification (MUST run after changes)
 npm run check
 
-# Linting
+# Linting (Vite+ / oxlint)
 npm run lint
-npm run lint -- --write    # Fix issues
 
-# Formatting
+# Formatting (Vite+ / oxfmt)
 npm run format
-npm run format -- --write  # Apply formatting
 ```
 
 **Note:** No test framework is currently configured. If adding tests, use Vitest for unit tests.
@@ -29,25 +27,22 @@ npm run format -- --write  # Apply formatting
 ## Tech Stack
 
 - **Framework:** Svelte 5 with runes ($state, $derived, etc.)
-- **Build Tool:** Vite
+- **Build Tool:** Vite+ (Vite-based)
 - **Language:** TypeScript (strict)
 - **Package Manager:** npm
-- **Linting/Formatting:** Biome
+- **Linting/Formatting:** Vite+ with oxlint / oxfmt
 
 ## Code Style Guidelines
 
-### Formatting (Biome Configuration)
+### Formatting
+
+- **Formatter:** oxfmt via Vite+
 - **Indent:** 4 spaces (no tabs)
-- **Line width:** 120 characters
 - **Line ending:** LF
-- **Semicolons:** Always required
-- **Trailing commas:** Always (except JSON)
-- **Arrow parentheses:** Always
-- **Bracket spacing:** Yes (`{ foo: bar }`)
 - **Quote style:** Double quotes for strings
-- **Property quotes:** As needed
 
 ### TypeScript
+
 - Enable strict mode checks
 - Use explicit types for function parameters and return values
 - Prefer `interface` over `type` for object shapes
@@ -55,6 +50,7 @@ npm run format -- --write  # Apply formatting
 - Avoid `any` - use `unknown` with type guards instead
 
 ### Svelte Components
+
 - Use `<script lang="ts">` for TypeScript support
 - Use Svelte 5 runes: `$state()`, `$derived()`, `$effect()`, `$props()`
 - Keep components focused and small
@@ -62,10 +58,12 @@ npm run format -- --write  # Apply formatting
 - Props interface: `interface Props { ... }`
 
 ### Imports
+
 - Group imports: external libs first, then internal modules
 - Use named imports when possible
 - Import order: Svelte, external deps, internal modules, types
 - Example:
+
 ```typescript
 import { mount } from "svelte";
 import { writable } from "svelte/store";
@@ -74,6 +72,7 @@ import type { GameState } from "./types";
 ```
 
 ### Naming Conventions
+
 - **Components:** PascalCase (e.g., `Counter.svelte`)
 - **Files:** camelCase for utilities, PascalCase for components
 - **Variables/Functions:** camelCase
@@ -82,27 +81,32 @@ import type { GameState } from "./types";
 - **Event handlers:** `handle<Event>` (e.g., `handleClick`)
 
 ### Error Handling
+
 - Use try-catch for async operations
 - Prefer early returns over nested conditionals
 - Validate props with TypeScript interfaces
 - Use non-null assertion (`!`) sparingly and only when certain
 
 ### State Management
+
 - Use Svelte 5 runes for local component state
 - External stores in `src/lib/stores/` for shared state
 - Example:
+
 ```typescript
 let count = $state(0);
 let doubled = $derived(count * 2);
 ```
 
 ### CSS/Styling
+
 - Component-scoped styles in `<style>` blocks
 - Global styles in `src/app.css`
 - Use CSS custom properties (variables) for theming
 - Mobile-first responsive design
 
 ### Project Structure
+
 ```
 src/
 ├── main.ts           # Entry point
@@ -117,7 +121,7 @@ src/
 
 1. Run `npm run check` - no TypeScript errors
 2. Run `npm run lint` - no linting errors
-3. Run `npm run format -- --write` - code is formatted
+3. Run `npm run format` - code is formatted
 4. Verify `npm run build` succeeds
 
 ## Dependencies

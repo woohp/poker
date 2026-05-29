@@ -1,35 +1,40 @@
 {
     "name": "poker",
-    "private": true,
     "version": "0.0.0",
+    "private": true,
     "type": "module",
     "scripts": {
-        "dev": "vite",
-        "build": "vite build",
-        "preview": "vite preview",
-        "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-        "lint": "biome lint",
-        "format": "biome format",
-        "test": "vitest run"
-    },
-    "devDependencies": {
-        "@sveltejs/vite-plugin-svelte": "^6.2.1",
-        "@tsconfig/svelte": "^5.0.6",
-        "@types/node": "^24.10.1",
-        "@types/qrcode": "^1.5.6",
-        "autoprefixer": "^10.4.24",
-        "postcss": "^8.5.6",
-        "svelte": "^5.43.8",
-        "svelte-check": "^4.3.4",
-        "tailwindcss": "^4.1.18",
-        "typescript": "~5.9.3",
-        "vite": "^7.2.4",
-        "vitest": "^4.1.7"
+        "dev": "vp dev",
+        "build": "vp build",
+        "preview": "vp preview",
+        "check": "vp check && svelte-check --tsconfig ./tsconfig.app.json && tsgo --noEmit -p tsconfig.node.json",
+        "lint": "vp lint",
+        "format": "vp fmt --write",
+        "test": "vp test run"
     },
     "dependencies": {
         "@tailwindcss/vite": "^4.1.18",
         "qrcode": "^1.5.4",
         "y-webtorrent": "github:woohp/y-webtorrent",
         "yjs": "^13.6.31"
-    }
+    },
+    "devDependencies": {
+        "@sveltejs/vite-plugin-svelte": "^6.2.1",
+        "@tsconfig/svelte": "^5.0.6",
+        "@types/node": "^24.10.1",
+        "@types/qrcode": "^1.5.6",
+        "@typescript/native-preview": "beta",
+        "svelte": "^5.43.8",
+        "svelte-check": "^4.3.4",
+        "tailwindcss": "^4.1.18",
+        "typescript": "^6.0.3",
+        "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+        "vite-plus": "latest",
+        "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+    },
+    "overrides": {
+        "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+        "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+    },
+    "packageManager": "npm@11.12.1"
 }

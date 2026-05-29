@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vite-plus/test";
 import {
     addPlayer,
     advancePhase,
@@ -52,7 +52,17 @@ function installLocalStorageMock() {
 
 function createState(playerCount = 2, overrides: Partial<GameConfig> = {}): GameState {
     const state = createInitialGameState({ ...config, ...overrides }, "Host", "host");
-    const names = ["Guest", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Ninth", "Tenth"];
+    const names = [
+        "Guest",
+        "Third",
+        "Fourth",
+        "Fifth",
+        "Sixth",
+        "Seventh",
+        "Eighth",
+        "Ninth",
+        "Tenth",
+    ];
 
     for (let i = 0; i < playerCount - 1; i++) {
         addPlayer(state, names[i]!, `p${i + 2}`);
@@ -363,7 +373,7 @@ describe("manual outcome recording", () => {
         expect(applyPayouts(state, [{ playerId: "missing", amount: 50 }])).toBe(false);
         state.players[0]!.handContribution = 20;
         state.players[1]!.handContribution = 30;
-        expect(applyPotWinners(state, [[] , ["p2"]])).toBe(false);
+        expect(applyPotWinners(state, [[], ["p2"]])).toBe(false);
         expect(applyPotWinners(state, [["missing"], ["p2"]])).toBe(false);
         expect(state.pot).toBe(50);
     });

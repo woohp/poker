@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type * as Y from "yjs";
 import type { GameState, PeerMessage } from "./types";
 
@@ -19,7 +19,6 @@ const webtorrentMock = vi.hoisted(() => ({
 }));
 
 vi.mock("y-webtorrent", async () => {
-
     class MockWebtorrentProvider {
         roomName: string;
         doc: Y.Doc;
@@ -91,7 +90,10 @@ describe("PeerManager", () => {
     });
 
     it("creates a host with the provided peer id and room code", async () => {
-        const peerManager = new PeerManager(() => {}, () => {});
+        const peerManager = new PeerManager(
+            () => {},
+            () => {},
+        );
 
         const peerId = await peerManager.createHost("host-1", "room-1");
         const provider = webtorrentMock.instances[0]!;
@@ -104,7 +106,10 @@ describe("PeerManager", () => {
     });
 
     it("joins a room and publishes a join message", async () => {
-        const peerManager = new PeerManager(() => {}, () => {});
+        const peerManager = new PeerManager(
+            () => {},
+            () => {},
+        );
 
         const peerId = await peerManager.joinGame("room-2", "Alice", "guest-1");
         const provider = webtorrentMock.instances[0]!;
@@ -126,7 +131,10 @@ describe("PeerManager", () => {
     });
 
     it("sends targeted messages and broadcasts shared state", async () => {
-        const peerManager = new PeerManager(() => {}, () => {});
+        const peerManager = new PeerManager(
+            () => {},
+            () => {},
+        );
         await peerManager.createHost("host-2", "room-3");
 
         const provider = webtorrentMock.instances[0]!;
@@ -257,7 +265,10 @@ describe("PeerManager", () => {
     });
 
     it("disconnect destroys the provider and allows repeated calls", async () => {
-        const peerManager = new PeerManager(() => {}, () => {});
+        const peerManager = new PeerManager(
+            () => {},
+            () => {},
+        );
         await peerManager.createHost("host-6", "room-8");
 
         const provider = webtorrentMock.instances[0]!;

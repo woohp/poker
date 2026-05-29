@@ -39,7 +39,11 @@ export function clearSession(): void {
     localStorage.removeItem(SESSION_KEY);
 }
 
-export function createInitialGameState(config: GameConfig, hostPlayerName: string, hostPeerId: string): GameState {
+export function createInitialGameState(
+    config: GameConfig,
+    hostPlayerName: string,
+    hostPeerId: string,
+): GameState {
     return {
         players: [createPlayer(hostPeerId, hostPlayerName, config.startingChips, true)],
         phase: "waiting",
@@ -120,7 +124,8 @@ export function moveBlinds(players: Player[]): void {
 
     const currentDealerIndex = players.findIndex((player) => player.isDealer);
     const dealerPosition = eligibleIndexes.findIndex((index) => index === currentDealerIndex);
-    const nextDealerPosition = dealerPosition >= 0 ? (dealerPosition + 1) % eligibleIndexes.length : 0;
+    const nextDealerPosition =
+        dealerPosition >= 0 ? (dealerPosition + 1) % eligibleIndexes.length : 0;
     const dealerIndex = eligibleIndexes[nextDealerPosition]!;
 
     for (const player of players) {
@@ -133,11 +138,13 @@ export function moveBlinds(players: Player[]): void {
 
     if (eligibleIndexes.length === 2) {
         players[dealerIndex]!.isSmallBlind = true;
-        players[eligibleIndexes[(nextDealerPosition + 1) % eligibleIndexes.length]!]!.isBigBlind = true;
+        players[eligibleIndexes[(nextDealerPosition + 1) % eligibleIndexes.length]!]!.isBigBlind =
+            true;
         return;
     }
 
-    players[eligibleIndexes[(nextDealerPosition + 1) % eligibleIndexes.length]!]!.isSmallBlind = true;
+    players[eligibleIndexes[(nextDealerPosition + 1) % eligibleIndexes.length]!]!.isSmallBlind =
+        true;
     players[eligibleIndexes[(nextDealerPosition + 2) % eligibleIndexes.length]!]!.isBigBlind = true;
 }
 
@@ -146,19 +153,37 @@ export function postBlinds(state: GameState): void {
     const bigBlindPlayer = state.players.find((player) => player.isBigBlind);
 
     if (smallBlindPlayer) {
-        contributeChips(state, smallBlindPlayer, Math.min(state.config.smallBlind, smallBlindPlayer.chips));
+        contributeChips(
+            state,
+            smallBlindPlayer,
+            Math.min(state.config.smallBlind, smallBlindPlayer.chips),
+        );
     }
 
     if (bigBlindPlayer) {
-        contributeChips(state, bigBlindPlayer, Math.min(state.config.bigBlind, bigBlindPlayer.chips));
+        contributeChips(
+            state,
+            bigBlindPlayer,
+            Math.min(state.config.bigBlind, bigBlindPlayer.chips),
+        );
     }
 
-    state.currentBet = Math.max(smallBlindPlayer?.currentBet || 0, bigBlindPlayer?.currentBet || 0, state.config.bigBlind);
+    state.currentBet = Math.max(
+        smallBlindPlayer?.currentBet || 0,
+        bigBlindPlayer?.currentBet || 0,
+        state.config.bigBlind,
+    );
     state.minRaise = state.config.bigBlind;
 }
 
 export function getValidActions(state: GameState, player: Player): PlayerAction[] {
-    if (!player.isActive || player.hasFolded || !player.isCurrentTurn || state.phase === "waiting" || state.phase === "showdown") {
+    if (
+        !player.isActive ||
+        player.hasFolded ||
+        !player.isCurrentTurn ||
+        state.phase === "waiting" ||
+        state.phase === "showdown"
+    ) {
         return [];
     }
 
@@ -182,7 +207,12 @@ export function getValidActions(state: GameState, player: Player): PlayerAction[
     return actions;
 }
 
-export function processAction(state: GameState, playerId: string, action: PlayerAction, amount?: number): boolean {
+export function processAction(
+    state: GameState,
+    playerId: string,
+    action: PlayerAction,
+    amount?: number,
+): boolean {
     const player = state.players.find((entry) => entry.id === playerId);
     if (!player || !player.isCurrentTurn) {
         return false;
@@ -241,7 +271,12 @@ export function processAction(state: GameState, playerId: string, action: Player
 
     if (increasedBet) {
         for (const otherPlayer of state.players) {
-            if (otherPlayer.id !== player.id && otherPlayer.isActive && !otherPlayer.hasFolded && otherPlayer.chips > 0) {
+            if (
+                otherPlayer.id !== player.id &&
+                otherPlayer.isActive &&
+                !otherPlayer.hasFolded &&
+                otherPlayer.chips > 0
+            ) {
                 otherPlayer.hasActed = false;
             }
         }
@@ -385,7 +420,10 @@ export function removePlayer(state: GameState, playerId: string): void {
     }
 }
 
-export function applyPayouts(state: GameState, payouts: Array<{ playerId: string; amount: number }>): boolean {
+export function applyPayouts(
+    state: GameState,
+    payouts: Array<{ playerId: string; amount: number }>,
+): boolean {
     if (payouts.length === 0) {
         return false;
     }
@@ -413,16 +451,20 @@ export function applyPayouts(state: GameState, payouts: Array<{ playerId: string
     state.phase = "showdown";
     state.currentBet = 0;
     state.lastPayouts = recordedPayouts;
-    state.statusMessage = recordedPayouts.map((payout) => `${payout.playerName} wins ${payout.amount}`).join(" • ");
+    state.statusMessage = recordedPayouts
+        .map((payout) => `${payout.playerName} wins ${payout.amount}`)
+        .join(" • ");
     state.pot = 0;
     saveGameState(state);
     return true;
 }
 
 export function calculatePotAllocations(state: GameState): PotAllocation[] {
-    const thresholds = [...new Set(state.players.map((player) => player.handContribution).filter((amount) => amount > 0))].sort(
-        (a, b) => a - b,
-    );
+    const thresholds = [
+        ...new Set(
+            state.players.map((player) => player.handContribution).filter((amount) => amount > 0),
+        ),
+    ].sort((a, b) => a - b);
     const pots: PotAllocation[] = [];
     let previous = 0;
 
@@ -432,7 +474,9 @@ export function calculatePotAllocations(state: GameState): PotAllocation[] {
         if (amount > 0) {
             pots.push({
                 amount,
-                eligiblePlayerIds: contributors.filter((player) => !player.hasFolded).map((player) => player.id),
+                eligiblePlayerIds: contributors
+                    .filter((player) => !player.hasFolded)
+                    .map((player) => player.id),
             });
         }
         previous = threshold;
@@ -462,7 +506,10 @@ export function applyPotWinners(state: GameState, winnersByPot: string[][]): boo
         const share = Math.floor(pot.amount / winners.length);
         let remainder = pot.amount % winners.length;
         for (const playerId of winners) {
-            payoutTotals.set(playerId, (payoutTotals.get(playerId) || 0) + share + (remainder > 0 ? 1 : 0));
+            payoutTotals.set(
+                playerId,
+                (payoutTotals.get(playerId) || 0) + share + (remainder > 0 ? 1 : 0),
+            );
             if (remainder > 0) {
                 remainder -= 1;
             }

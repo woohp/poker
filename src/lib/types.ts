@@ -75,6 +75,10 @@ export interface JoinResponseMessage {
     message?: string;
 }
 
-export type PeerMessage = ActionMessage | StateUpdateMessage | JoinRequestMessage | JoinResponseMessage;
+export type PeerMessage =
+    | ActionMessage
+    | StateUpdateMessage
+    | JoinRequestMessage
+    | JoinResponseMessage;
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
