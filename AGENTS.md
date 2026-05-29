@@ -4,24 +4,24 @@
 
 ```bash
 # Development server
-bun run dev
+npm run dev
 
 # Production build
-bun run build
+npm run build
 
 # Preview production build
-bun run preview
+npm run preview
 
 # Type checking (MUST run after changes)
-bun run check
+npm run check
 
 # Linting
-bun run lint
-bun run lint -- --write    # Fix issues
+npm run lint
+npm run lint -- --write    # Fix issues
 
 # Formatting
-bun run format
-bun run format -- --write  # Apply formatting
+npm run format
+npm run format -- --write  # Apply formatting
 ```
 
 **Note:** No test framework is currently configured. If adding tests, use Vitest for unit tests.
@@ -31,7 +31,7 @@ bun run format -- --write  # Apply formatting
 - **Framework:** Svelte 5 with runes ($state, $derived, etc.)
 - **Build Tool:** Vite
 - **Language:** TypeScript (strict)
-- **Package Manager:** Bun
+- **Package Manager:** npm
 - **Linting/Formatting:** Biome
 
 ## Code Style Guidelines
@@ -115,12 +115,13 @@ src/
 
 ## Pre-commit Checklist
 
-1. Run `bun run check` - no TypeScript errors
-2. Run `bun run lint` - no linting errors
-3. Run `bun run format -- --write` - code is formatted
-4. Verify `bun run build` succeeds
+1. Run `npm run check` - no TypeScript errors
+2. Run `npm run lint` - no linting errors
+3. Run `npm run format -- --write` - code is formatted
+4. Verify `npm run build` succeeds
 
 ## Dependencies
 
-- `peerjs` - WebRTC peer connections
+- `y-webtorrent` - WebRTC peer discovery/signaling + Yjs sync
+- `yjs` - Shared CRDT state
 - `qrcode` - QR code generation

@@ -1,151 +1,210 @@
-import Peer, { type DataConnection } from "peerjs";
-import type { GameState, PeerMessage, Player } from "./types";
+import * as Y from "yjs";
+import { WebtorrentProvider } from "y-webtorrent";
+import type { GameState, PeerMessage } from "./types";
 
 type MessageHandler = (message: PeerMessage, fromPeerId: string) => void;
 type ConnectionChangeHandler = (peerId: string, connected: boolean) => void;
 
+interface MessageEnvelope {
+    id: string;
+    from: string;
+    to: string | null;
+    message: Exclude<PeerMessage, { type: "state" }>;
+}
+
+const TRACKER_URLS = ["wss://tracker.openwebtorrent.com", "wss://tracker.webtorrent.dev"];
+
+export function generateRoomCode(length = 10): string {
+    return randomId(length);
+}
+
+export function generatePeerId(length = 20): string {
+    return randomId(length);
+}
+
 export class PeerManager {
-    private peer: Peer | null = null;
-    private connections: Map<string, DataConnection> = new Map();
+    private provider: WebtorrentProvider | null = null;
+    private doc: Y.Doc | null = null;
+    private messages: Y.Array<string> | null = null;
+    private stateMap: Y.Map<string> | null = null;
     private onMessage: MessageHandler;
     private onConnectionChange: ConnectionChangeHandler;
-    private localPeerId: string = "";
-    private isHost: boolean = false;
+    private localPeerId = "";
+    private roomCode = "";
+    private isHost = false;
+    private knownMessageCount = 0;
+    private connectedPeerIds: Set<string> = new Set();
 
     constructor(onMessage: MessageHandler, onConnectionChange: ConnectionChangeHandler) {
         this.onMessage = onMessage;
         this.onConnectionChange = onConnectionChange;
     }
 
-    async createHost(): Promise<string> {
+    async createHost(peerId?: string, roomCode?: string): Promise<string> {
         this.isHost = true;
-        this.peer = new Peer();
-
-        return new Promise((resolve, reject) => {
-            if (!this.peer) {
-                reject(new Error("Peer not initialized"));
-                return;
-            }
-
-            this.peer.on("open", (id) => {
-                this.localPeerId = id;
-                console.log("Host peer ID:", id);
-                resolve(id);
-            });
-
-            this.peer.on("connection", (conn) => {
-                this.handleIncomingConnection(conn);
-            });
-
-            this.peer.on("error", (err) => {
-                console.error("Peer error:", err);
-                reject(err);
-            });
-        });
+        this.localPeerId = peerId || generatePeerId();
+        this.roomCode = roomCode || generateRoomCode();
+        await this.initializeProvider();
+        return this.localPeerId;
     }
 
-    async joinGame(hostPeerId: string, playerName: string): Promise<string> {
+    async joinGame(roomCode: string, playerName: string, peerId?: string): Promise<string> {
         this.isHost = false;
-        this.peer = new Peer();
+        this.localPeerId = peerId || generatePeerId();
+        this.roomCode = roomCode;
+        await this.initializeProvider();
 
-        return new Promise((resolve, reject) => {
-            if (!this.peer) {
-                reject(new Error("Peer not initialized"));
+        this.messages?.push([
+            JSON.stringify({
+                id: randomId(16),
+                from: this.localPeerId,
+                to: null,
+                message: {
+                    type: "join",
+                    playerName,
+                    peerId: this.localPeerId,
+                },
+            } satisfies MessageEnvelope),
+        ]);
+
+        return this.localPeerId;
+    }
+
+    private async initializeProvider(): Promise<void> {
+        this.disconnect();
+
+        this.doc = new Y.Doc();
+        this.messages = this.doc.getArray<string>("messages");
+        this.stateMap = this.doc.getMap<string>("state");
+        this.knownMessageCount = this.messages.length;
+        this.connectedPeerIds.clear();
+
+        this.messages.observe(() => {
+            this.handleMessageUpdates();
+        });
+
+        this.stateMap.observe((event) => {
+            if (this.isHost || !event.keysChanged.has("game")) {
                 return;
             }
 
-            this.peer.on("open", (id) => {
-                this.localPeerId = id;
-                console.log("Joined with peer ID:", id);
+            const rawState = this.stateMap?.get("game");
+            if (!rawState) {
+                return;
+            }
 
-                const conn = this.peer!.connect(hostPeerId, {
-                    reliable: true,
-                });
-
-                conn.on("open", () => {
-                    this.connections.set(hostPeerId, conn);
-                    this.setupConnectionHandlers(conn, hostPeerId);
-
-                    // Send join request
-                    this.sendToPeer(hostPeerId, {
-                        type: "join",
-                        playerName,
-                        peerId: id,
-                    });
-
-                    resolve(id);
-                });
-
-                conn.on("error", (err) => {
-                    console.error("Connection error:", err);
-                    reject(err);
-                });
-            });
-
-            this.peer.on("error", (err) => {
-                console.error("Peer error:", err);
-                reject(err);
-            });
-        });
-    }
-
-    private handleIncomingConnection(conn: DataConnection): void {
-        conn.on("open", () => {
-            console.log("Incoming connection from:", conn.peer);
-            this.setupConnectionHandlers(conn, conn.peer);
-        });
-    }
-
-    private setupConnectionHandlers(conn: DataConnection, peerId: string): void {
-        conn.on("data", (data: unknown) => {
             try {
-                const message = data as PeerMessage;
-                this.onMessage(message, peerId);
+                const state = JSON.parse(rawState) as GameState;
+                this.onMessage({ type: "state", state }, "host");
             } catch (error) {
-                console.error("Error handling message:", error);
+                console.error("Failed to parse shared game state:", error);
             }
         });
 
-        conn.on("close", () => {
-            console.log("Connection closed:", peerId);
-            this.connections.delete(peerId);
-            this.onConnectionChange(peerId, false);
+        this.provider = new WebtorrentProvider(this.roomCode, this.doc, {
+            trackers: TRACKER_URLS,
+            peerId: this.localPeerId,
         });
 
-        conn.on("error", (err) => {
-            console.error("Connection error:", peerId, err);
+        this.provider.on("peers", (peerIds: unknown) => {
+            this.handlePeerList(peerIds as string[]);
         });
+
+        this.provider.on("connection-error", (error: unknown) => {
+            console.error("Webtorrent connection error:", error);
+        });
+
+        this.provider.on("peer-error", (error: unknown) => {
+            console.error("Webtorrent peer error:", error);
+        });
+
+        await this.provider.ready;
     }
 
-    sendToPeer(peerId: string, message: PeerMessage): void {
-        const conn = this.connections.get(peerId);
-        if (conn && conn.open) {
-            conn.send(message);
-        } else {
-            console.warn("Connection not open for peer:", peerId);
+    private handleMessageUpdates(): void {
+        if (!this.messages) {
+            return;
         }
-    }
 
-    broadcast(message: PeerMessage, excludePeerId?: string): void {
-        for (const [peerId, conn] of this.connections) {
-            if (peerId !== excludePeerId && conn.open) {
-                conn.send(message);
+        const nextMessages = this.messages.toArray().slice(this.knownMessageCount);
+        this.knownMessageCount += nextMessages.length;
+
+        for (const rawEnvelope of nextMessages) {
+            try {
+                const envelope = JSON.parse(rawEnvelope) as MessageEnvelope;
+                if (envelope.from === this.localPeerId) {
+                    continue;
+                }
+
+                if (envelope.to && envelope.to !== this.localPeerId) {
+                    continue;
+                }
+
+                if (envelope.to === null && !this.isHost) {
+                    continue;
+                }
+
+                this.onMessage(envelope.message, envelope.from);
+            } catch (error) {
+                console.error("Failed to parse room message:", error);
             }
         }
     }
 
-    broadcastState(state: GameState, excludePeerId?: string): void {
-        this.broadcast(
-            {
-                type: "state",
-                state,
-            },
-            excludePeerId,
-        );
+    private handlePeerList(peerIds: string[]): void {
+        const nextPeerIds = new Set(peerIds);
+
+        for (const peerId of nextPeerIds) {
+            if (!this.connectedPeerIds.has(peerId)) {
+                this.onConnectionChange(peerId, true);
+            }
+        }
+
+        for (const peerId of this.connectedPeerIds) {
+            if (!nextPeerIds.has(peerId)) {
+                this.onConnectionChange(peerId, false);
+            }
+        }
+
+        this.connectedPeerIds = nextPeerIds;
+    }
+
+    sendToPeer(peerId: string, message: Exclude<PeerMessage, { type: "state" }>): void {
+        this.messages?.push([
+            JSON.stringify({
+                id: randomId(16),
+                from: this.localPeerId,
+                to: peerId,
+                message,
+            } satisfies MessageEnvelope),
+        ]);
+    }
+
+    broadcast(message: Exclude<PeerMessage, { type: "state" }>, excludePeerId?: string): void {
+        this.messages?.push([
+            JSON.stringify({
+                id: randomId(16),
+                from: this.localPeerId,
+                to: null,
+                message: excludePeerId
+                    ? {
+                          ...message,
+                      }
+                    : message,
+            } satisfies MessageEnvelope),
+        ]);
+    }
+
+    broadcastState(state: GameState, _excludePeerId?: string): void {
+        this.stateMap?.set("game", JSON.stringify(state));
     }
 
     getLocalPeerId(): string {
         return this.localPeerId;
+    }
+
+    getRoomCode(): string {
+        return this.roomCode;
     }
 
     isHostConnection(): boolean {
@@ -153,11 +212,25 @@ export class PeerManager {
     }
 
     disconnect(): void {
-        for (const conn of this.connections.values()) {
-            conn.close();
-        }
-        this.connections.clear();
-        this.peer?.destroy();
-        this.peer = null;
+        this.provider?.destroy();
+        this.provider = null;
+        this.doc?.destroy();
+        this.doc = null;
+        this.messages = null;
+        this.stateMap = null;
+        this.knownMessageCount = 0;
+        this.connectedPeerIds.clear();
     }
+}
+
+function randomId(length: number): string {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+
+    let output = "";
+    for (const byte of bytes) {
+        output += alphabet[byte % alphabet.length];
+    }
+    return output;
 }

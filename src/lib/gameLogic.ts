@@ -1,6 +1,38 @@
 import type { GameConfig, GamePhase, GameState, Player, PlayerAction } from "./types";
 
 const STORAGE_KEY = "poker_game_state";
+const SESSION_KEY = "poker_session";
+
+export interface SessionData {
+    localPlayerId: string;
+    isHost: boolean;
+    roomCode: string;
+    playerName: string;
+}
+
+export function saveSession(data: SessionData): void {
+    try {
+        localStorage.setItem(SESSION_KEY, JSON.stringify(data));
+    } catch (error) {
+        console.error("Failed to save session:", error);
+    }
+}
+
+export function loadSession(): SessionData | null {
+    try {
+        const saved = localStorage.getItem(SESSION_KEY);
+        if (saved) {
+            return JSON.parse(saved) as SessionData;
+        }
+    } catch (error) {
+        console.error("Failed to load session:", error);
+    }
+    return null;
+}
+
+export function clearSession(): void {
+    localStorage.removeItem(SESSION_KEY);
+}
 
 export function createInitialGameState(config: GameConfig, hostPlayerName: string, hostPeerId: string): GameState {
     const host: Player = {

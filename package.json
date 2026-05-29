@@ -26,7 +26,8 @@
     },
     "dependencies": {
         "@tailwindcss/vite": "^4.1.18",
-        "peerjs": "^1.5.5",
-        "qrcode": "^1.5.4"
+        "qrcode": "^1.5.4",
+        "y-webtorrent": "github:woohp/y-webtorrent",
+        "yjs": "^13.6.31"
     }
 }

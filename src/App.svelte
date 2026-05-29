@@ -4,13 +4,16 @@ import { onDestroy, onMount } from "svelte";
 import {
     addPlayer,
     advancePhase,
+    clearSession,
     createInitialGameState,
     getValidActions,
     isBettingRoundComplete,
     loadGameState,
+    loadSession,
     processAction,
     removePlayer,
     saveGameState,
+    saveSession,
     startNewHand,
 } from "./lib/gameLogic";
 import { PeerManager } from "./lib/peerManager";
@@ -21,6 +24,7 @@ let peerManager: PeerManager | null = $state(null);
 let gameState: GameState | null = $state(null);
 let playerName = $state("");
 let joinCode = $state("");
+let roomCode = $state("");
 let errorMessage = $state("");
 let qrCanvas: HTMLCanvasElement | null = $state(null);
 
@@ -35,15 +39,54 @@ let raiseAmount = $state(0);
 
 onMount(() => {
     const saved = loadGameState();
-    if (saved) {
+    const session = loadSession();
+    const urlParams = new URLSearchParams(window.location.search);
+    const joinParam = urlParams.get("join");
+
+    if (joinParam) {
+        clearSession();
+        joinCode = joinParam;
+        view = "join";
+        return;
+    }
+
+    if (saved && session) {
         gameState = saved;
+        playerName = session.playerName;
+        localPlayerId = session.localPlayerId;
+        roomCode = session.roomCode;
+        isHost = session.isHost;
         view = "game";
+        void restoreSession(session.roomCode, session.playerName, session.localPlayerId, session.isHost, saved);
     }
 });
 
 onDestroy(() => {
     peerManager?.disconnect();
 });
+
+async function restoreSession(
+    savedRoomCode: string,
+    savedPlayerName: string,
+    savedPeerId: string,
+    savedIsHost: boolean,
+    savedState: GameState,
+) {
+    peerManager?.disconnect();
+    peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
+
+    try {
+        if (savedIsHost) {
+            await peerManager.createHost(savedPeerId, savedRoomCode);
+            peerManager.broadcastState(savedState);
+            setTimeout(() => generateQRCode(savedRoomCode), 100);
+        } else {
+            await peerManager.joinGame(savedRoomCode, savedPlayerName, savedPeerId);
+        }
+    } catch (_error) {
+        errorMessage = "Failed to restore connection.";
+    }
+}
 
 function handlePeerMessage(message: PeerMessage, fromPeerId: string) {
     if (isHost) {
@@ -95,6 +138,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
                     playerId: player.id,
                     state: gameState,
                 });
+                peerManager?.broadcastState(gameState);
                 saveGameState(gameState);
             } else {
                 peerManager?.sendToPeer(fromPeerId, {
@@ -138,12 +182,20 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
             if (message.accepted && message.state && message.playerId) {
                 gameState = message.state;
                 localPlayerId = message.playerId;
+                roomCode = joinCode.trim() || roomCode;
                 view = "game";
                 saveGameState(gameState);
+                saveSession({
+                    localPlayerId: message.playerId,
+                    isHost: false,
+                    roomCode,
+                    playerName,
+                });
             } else {
                 errorMessage = message.message || "Failed to join game";
                 peerManager?.disconnect();
                 peerManager = null;
+                view = "join";
             }
             break;
         }
@@ -154,6 +206,7 @@ function handleConnectionChange(peerId: string, connected: boolean) {
     if (!connected && isHost && gameState) {
         removePlayer(gameState, peerId);
         peerManager?.broadcastState(gameState);
+        saveGameState(gameState);
     }
 }
 
@@ -171,13 +224,16 @@ async function createGame() {
     try {
         const peerId = await peerManager.createHost();
         localPlayerId = peerId;
+        roomCode = peerManager.getRoomCode();
 
         const config: GameConfig = { startingChips, smallBlind, bigBlind, ante };
         gameState = createInitialGameState(config, playerName, peerId);
+        peerManager.broadcastState(gameState);
         saveGameState(gameState);
-        view = "create";
+        saveSession({ localPlayerId: peerId, isHost: true, roomCode, playerName });
+        view = "game";
 
-        setTimeout(() => generateQRCode(peerId), 100);
+        setTimeout(() => generateQRCode(roomCode), 100);
     } catch (_error) {
         errorMessage = "Failed to create game. Please try again.";
         view = "home";
@@ -185,9 +241,9 @@ async function createGame() {
     }
 }
 
-async function generateQRCode(peerId: string) {
+async function generateQRCode(currentRoomCode: string) {
     if (!qrCanvas) return;
-    const url = `${window.location.origin}?join=${peerId}`;
+    const url = `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(currentRoomCode)}`;
     try {
         await QRCode.toCanvas(qrCanvas, url, { width: 200, margin: 2 });
     } catch (_error) {
@@ -209,9 +265,10 @@ async function joinGame() {
     view = "loading";
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
     isHost = false;
+    roomCode = joinCode.trim();
 
     try {
-        await peerManager.joinGame(joinCode.trim(), playerName);
+        await peerManager.joinGame(roomCode, playerName);
         setTimeout(() => {
             if (view === "loading") {
                 errorMessage = "Connection timed out. Please check the code and try again.";
@@ -235,13 +292,14 @@ function startGame() {
     }
     startNewHand(gameState);
     peerManager?.broadcastState(gameState);
+    saveGameState(gameState);
     view = "game";
 }
 
 function performAction(action: "fold" | "check" | "call" | "raise" | "allin") {
     if (!gameState || isHost) return;
     const amount = action === "raise" ? raiseAmount : undefined;
-    const hostId = gameState.players[0]?.id;
+    const hostId = gameState.players.find((player) => player.isHost)?.id;
     if (hostId) {
         peerManager?.sendToPeer(hostId, {
             type: "action",
@@ -275,8 +333,8 @@ function calculateMinRaise(): number {
 }
 
 function copyJoinCode() {
-    if (!peerManager) return;
-    navigator.clipboard.writeText(peerManager.getLocalPeerId());
+    if (!roomCode) return;
+    navigator.clipboard.writeText(roomCode);
 }
 
 function leaveGame() {
@@ -285,7 +343,10 @@ function leaveGame() {
     gameState = null;
     isHost = false;
     localPlayerId = "";
+    roomCode = "";
+    joinCode = "";
     view = "home";
+    clearSession();
 }
 
 function nextPhase() {
@@ -296,6 +357,7 @@ function nextPhase() {
         advancePhase(gameState);
     }
     peerManager?.broadcastState(gameState);
+    saveGameState(gameState);
 }
 </script>
 
@@ -332,98 +394,110 @@ function nextPhase() {
         </div>
 
     {:else if view === "create"}
-        <div class="py-8">
-            <h2 class="text-2xl font-bold mb-6">Create Game</h2>
+        <div class="py-4">
+            <h2 class="text-2xl font-bold mb-4">Create Game</h2>
             
-            <div class="bg-gray-50 p-6 rounded-xl mb-6">
-                <h3 class="font-semibold mb-4">Game Settings</h3>
+            <div class="bg-gray-50 p-4 rounded-xl mb-4">
+                <h3 class="font-semibold mb-3 text-gray-700">Game Settings</h3>
                 
-                <div class="grid grid-cols-2 gap-4 mb-4">
+                <div class="grid grid-cols-2 gap-3 mb-3">
                     <div>
-                        <label for="startingChips" class="block mb-1 text-sm">Starting Chips</label>
-                        <input 
-                            type="number" 
+                        <label for="startingChips" class="block mb-1 text-sm font-medium text-gray-600">Starting Chips</label>
+                        <input
+                            type="number"
                             id="startingChips"
                             bind:value={startingChips}
                             min="100"
                             step="100"
-                            class="w-full px-3 py-2 border rounded-lg"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
                         />
                     </div>
                     <div>
-                        <label for="ante" class="block mb-1 text-sm">Ante</label>
-                        <input 
-                            type="number" 
+                        <label for="ante" class="block mb-1 text-sm font-medium text-gray-600">Ante</label>
+                        <input
+                            type="number"
                             id="ante"
                             bind:value={ante}
                             min="0"
-                            class="w-full px-3 py-2 border rounded-lg"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
                         />
                     </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4">
+                <div class="grid grid-cols-2 gap-3">
                     <div>
-                        <label for="smallBlind" class="block mb-1 text-sm">Small Blind</label>
-                        <input 
-                            type="number" 
+                        <label for="smallBlind" class="block mb-1 text-sm font-medium text-gray-600">Small Blind</label>
+                        <input
+                            type="number"
                             id="smallBlind"
                             bind:value={smallBlind}
                             min="1"
-                            class="w-full px-3 py-2 border rounded-lg"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
                         />
                     </div>
                     <div>
-                        <label for="bigBlind" class="block mb-1 text-sm">Big Blind</label>
-                        <input 
-                            type="number" 
+                        <label for="bigBlind" class="block mb-1 text-sm font-medium text-gray-600">Big Blind</label>
+                        <input
+                            type="number"
                             id="bigBlind"
                             bind:value={bigBlind}
                             min="1"
-                            class="w-full px-3 py-2 border rounded-lg"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
                         />
                     </div>
                 </div>
             </div>
 
             {#if errorMessage}
-                <p class="text-red-500 mb-4">{errorMessage}</p>
+                <p class="text-red-500 mb-3 text-sm">{errorMessage}</p>
             {/if}
 
-            <div class="space-y-3">
-                <button class="w-full py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600" onclick={createGame}>
+            <div class="space-y-2">
+                <button class="w-full py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition font-medium" onclick={createGame}>
                     Create Room
                 </button>
-                <button class="w-full py-3 text-gray-500 hover:text-gray-700" onclick={() => view = "home"}>
+                <button class="w-full py-2.5 text-gray-500 hover:text-gray-700 transition" onclick={() => view = "home"}>
                     Back
                 </button>
             </div>
         </div>
 
     {:else if view === "join"}
-        <div class="py-8">
-            <h2 class="text-2xl font-bold mb-6">Join Game</h2>
+        <div class="py-4">
+            <h2 class="text-2xl font-bold mb-4">Join Game</h2>
             
-            <div class="mb-6">
-                <label for="joinCode" class="block mb-2 font-medium">Room Code</label>
+            <div class="mb-4">
+                <label for="joinPlayerName" class="block mb-2 font-medium text-gray-700">Your Name</label>
+                <input 
+                    type="text" 
+                    id="joinPlayerName"
+                    bind:value={playerName}
+                    placeholder="Enter your name"
+                    maxlength="20"
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+            </div>
+
+            <div class="mb-4">
+                <label for="joinCode" class="block mb-2 font-medium text-gray-700">Room Code</label>
                 <input 
                     type="text" 
                     id="joinCode"
                     bind:value={joinCode}
                     placeholder="Enter room code"
-                    class="w-full px-4 py-3 border border-gray-300 rounded-lg"
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
             </div>
 
             {#if errorMessage}
-                <p class="text-red-500 mb-4">{errorMessage}</p>
+                <p class="text-red-500 mb-3 text-sm">{errorMessage}</p>
             {/if}
 
-            <div class="space-y-3">
-                <button class="w-full py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600" onclick={joinGame}>
+            <div class="space-y-2">
+                <button class="w-full py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition font-medium" onclick={joinGame}>
                     Join
                 </button>
-                <button class="w-full py-3 text-gray-500 hover:text-gray-700" onclick={() => view = "home"}>
+                <button class="w-full py-2.5 text-gray-500 hover:text-gray-700 transition" onclick={() => view = "home"}>
                     Back
                 </button>
             </div>
@@ -445,7 +519,7 @@ function nextPhase() {
                         <div class="bg-gray-50 p-6 rounded-xl mb-6">
                             <p class="mb-4">Share this code with other players:</p>
                             <div class="flex items-center justify-center gap-3 mb-6">
-                                <code class="text-2xl font-bold bg-gray-800 text-white px-5 py-3 rounded-lg tracking-wider">{localPlayerId}</code>
+                                <code class="text-2xl font-bold bg-gray-800 text-white px-5 py-3 rounded-lg tracking-wider">{roomCode}</code>
                                 <button class="px-4 py-2 bg-gray-200 rounded-lg text-sm" onclick={copyJoinCode}>
                                     Copy
                                 </button>
@@ -458,11 +532,11 @@ function nextPhase() {
                         </div>
 
                         <div class="bg-gray-50 p-6 rounded-xl mb-6 text-left">
-                            <h3 class="font-semibold mb-3">Players ({gameState.players.length}/10)</h3>
+                            <h3 class="font-semibold mb-3 text-gray-900">Players ({gameState.players.length}/10)</h3>
                             {#each gameState.players as player}
-                                <div class="flex justify-between items-center py-3 border-b last:border-0">
-                                    <span class="font-medium">{player.name}</span>
-                                    <span class="text-gray-500 text-sm">{#if player.isHost}(Host){/if}</span>
+                                <div class="flex justify-between items-center py-3 border-b last:border-0 border-gray-300">
+                                    <span class="font-medium text-gray-900">{player.name}</span>
+                                    <span class="text-gray-600 text-sm">{#if player.isHost}(Host){/if}</span>
                                 </div>
                             {/each}
                         </div>
