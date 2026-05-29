@@ -22,7 +22,7 @@ npm run lint
 npm run format
 ```
 
-**Note:** No test framework is currently configured. If adding tests, use Vitest for unit tests.
+**Note:** Tests are run with Vite+ test (`vite-plus/test`).
 
 ## Tech Stack
 
@@ -108,13 +108,25 @@ let doubled = $derived(count * 2);
 ### Project Structure
 
 ```
-src/
-├── main.ts           # Entry point
-├── App.svelte        # Root component
-├── app.css           # Global styles
-├── lib/              # Reusable components and utilities
-│   └── Counter.svelte
-└── assets/           # Static assets (images, etc.)
+.
+├── .github/workflows/   # CI
+├── docs/                # Production build output for GitHub Pages
+├── src/
+│   ├── main.ts
+│   ├── App.svelte
+│   ├── app.css
+│   └── lib/
+│       ├── gameLogic.ts
+│       ├── gameLogic.test.ts
+│       ├── peerManager.ts
+│       ├── peerManager.test.ts
+│       ├── poker.ts
+│       └── types.ts
+├── package.json
+├── tsconfig.app.json
+├── tsconfig.json
+├── tsconfig.node.json
+└── vite.config.ts
 ```
 
 ## Pre-commit Checklist

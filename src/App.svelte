@@ -699,7 +699,7 @@ function nextPhase() {
                         <div class="bg-slate-950/45 border border-white/10 p-6 rounded-3xl mb-6">
                             <p class="mb-4 text-slate-300 font-medium">Share this code with other players</p>
                             <div class="flex flex-col sm:flex-row items-center justify-center gap-3 mb-2">
-                                <code class="text-3xl font-black bg-slate-900 text-white px-6 py-4 rounded-2xl tracking-[0.18em] shadow-lg ring-1 ring-white/10">{roomCode}</code>
+                                <code class="text-3xl font-black bg-slate-900 text-white px-6 py-4 rounded-2xl tracking-[0.18em] shadow-lg">{roomCode}</code>
                                 <button
                                     class="px-5 py-3 rounded-2xl text-sm font-extrabold transition-colors shadow-lg shadow-emerald-950/20 text-emerald-950"
                                     class:bg-emerald-500={!copySuccess}
