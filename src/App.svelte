@@ -40,6 +40,7 @@ let localPlayerId = $state("");
 let raiseAmount = $state(0);
 let copySuccess = $state(false);
 let showdownSelections: Record<number, string[]> = $state({});
+let autoCheckRequested = $state(false);
 
 onMount(() => {
     const saved = loadGameState();
@@ -91,6 +92,33 @@ $effect(() => {
 
     if (changed) {
         showdownSelections = nextSelections;
+    }
+});
+
+$effect(() => {
+    if (!autoCheckRequested) {
+        return;
+    }
+
+    const me = getMyPlayer();
+    if (!gameState || !me || !me.isActive || me.hasFolded || gameState.phase === "waiting" || gameState.phase === "showdown") {
+        autoCheckRequested = false;
+        return;
+    }
+
+    if (!me.isCurrentTurn && gameState.currentBet !== me.currentBet) {
+        autoCheckRequested = false;
+        return;
+    }
+
+    if (me.isCurrentTurn) {
+        if (canPerformAction("check")) {
+            autoCheckRequested = false;
+            performAction("check");
+            return;
+        }
+
+        autoCheckRequested = false;
     }
 });
 
@@ -344,6 +372,7 @@ function startGame() {
 function performAction(action: "fold" | "check" | "call" | "raise" | "allin") {
     if (!gameState) return;
 
+    autoCheckRequested = false;
     const amount = action === "raise" ? raiseAmount : undefined;
 
     if (isHost) {
@@ -377,6 +406,37 @@ function calculateToCall(): number {
     const me = getMyPlayer();
     if (!me || !gameState) return 0;
     return gameState.currentBet - me.currentBet;
+}
+
+function canQueueCheck(): boolean {
+    const me = getMyPlayer();
+    if (!me || !gameState) {
+        return false;
+    }
+
+    if (!me.isActive || me.hasFolded || me.isCurrentTurn || gameState.phase === "waiting" || gameState.phase === "showdown") {
+        return false;
+    }
+
+    return gameState.currentBet === me.currentBet;
+}
+
+function toggleAutoCheck() {
+    if (!canQueueCheck()) {
+        autoCheckRequested = false;
+        return;
+    }
+
+    autoCheckRequested = !autoCheckRequested;
+}
+
+function shouldShowWaitingCheck(): boolean {
+    const me = getMyPlayer();
+    if (!me || !gameState) {
+        return false;
+    }
+
+    return me.isActive && !me.hasFolded && !me.isCurrentTurn && gameState.phase !== "waiting" && gameState.phase !== "showdown";
 }
 
 function calculateMinRaise(): number {
@@ -771,9 +831,9 @@ function nextPhase() {
                                         >
                                             Record Outcome
                                         </button>
-                                        {#if !canRecordOutcome()}
-                                            <p class="text-sm text-white/65">Select at least one winner for each pot to continue.</p>
-                                        {/if}
+                                        <p class={`text-sm text-white/65 ${canRecordOutcome() ? "invisible" : "visible"}`}>
+                                            Select at least one winner for each pot to continue.
+                                        </p>
                                     </div>
                                 </div>
                             </div>
@@ -868,7 +928,18 @@ function nextPhase() {
                                     </button>
                                 </div>
                             {:else}
-                                <p class="text-center italic text-white/80 font-medium">Waiting for your turn...</p>
+                                <div class="flex flex-col items-center gap-3">
+                                    {#if shouldShowWaitingCheck()}
+                                        <button
+                                            class={`min-w-44 py-3 px-5 rounded-xl font-bold transition-colors ${canQueueCheck() ? (autoCheckRequested ? "bg-emerald-500 hover:bg-emerald-400 text-white shadow-md" : "bg-white/90 hover:bg-white text-emerald-950 shadow-md") : "bg-white/10 text-white/45 shadow-none"}`}
+                                            disabled={!canQueueCheck()}
+                                            onclick={toggleAutoCheck}
+                                        >
+                                            Check
+                                        </button>
+                                    {/if}
+                                    <p class="text-center italic text-white/80 font-medium">Waiting for your turn...</p>
+                                </div>
                             {/if}
                         </div>
                     </div>
