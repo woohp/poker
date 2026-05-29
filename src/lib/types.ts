@@ -2,12 +2,20 @@
  * Poker Game Types
  */
 
+export interface Payout {
+    playerId: string;
+    playerName: string;
+    amount: number;
+}
+
 export interface Player {
     id: string;
     name: string;
     chips: number;
     isActive: boolean;
     hasFolded: boolean;
+    hasActed: boolean;
+    handContribution: number;
     currentBet: number;
     isDealer: boolean;
     isSmallBlind: boolean;
@@ -35,6 +43,8 @@ export interface GameState {
     deck: number[];
     communityCards: number[];
     config: GameConfig;
+    statusMessage: string;
+    lastPayouts: Payout[];
 }
 
 export type PlayerAction = "fold" | "check" | "call" | "raise" | "allin";
