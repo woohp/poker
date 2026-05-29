@@ -8,7 +8,7 @@ jobs:
     lint-and-test:
         runs-on: ubuntu-latest
         container:
-            image: node:current-slim
+            image: node:current
 
         steps:
             - name: Checkout
