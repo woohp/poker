@@ -19,9 +19,11 @@ import {
     startNewHand,
 } from "./lib/gameLogic";
 import { PeerManager } from "./lib/peerManager";
+import { navigate, parseRoute, type Route } from "./lib/router";
 import type { GameConfig, GameState, PeerMessage, Player } from "./lib/types";
 
-let view: "home" | "create" | "join" | "game" | "loading" = $state("home");
+let route: Route = $state({ name: "home" });
+let isLoading = $state(false);
 let peerManager: PeerManager | null = $state(null);
 let gameState: GameState | null = $state(null);
 let playerName = $state("");
@@ -43,16 +45,36 @@ let showdownSelections: Record<number, string[]> = $state({});
 let autoCheckRequested = $state(false);
 
 onMount(() => {
+    function syncRoute() {
+        const nextRoute = parseRoute(window.location.hash, window.location.search);
+        if (gameState && nextRoute.name !== "room" && !isLoading) {
+            navigate({ name: "room", roomCode }, true);
+            return;
+        }
+
+        route = nextRoute;
+        if (route.name === "join" && route.roomCode) {
+            joinCode = route.roomCode;
+        }
+    }
+
+    function cleanupRouteListeners() {
+        window.removeEventListener("hashchange", syncRoute);
+        window.removeEventListener("popstate", syncRoute);
+    }
+
+    syncRoute();
+    window.addEventListener("hashchange", syncRoute);
+    window.addEventListener("popstate", syncRoute);
+
     const saved = loadGameState();
     const session = loadSession();
-    const urlParams = new URLSearchParams(window.location.search);
-    const joinParam = urlParams.get("join");
 
-    if (joinParam) {
+    if (route.name === "join" && route.roomCode) {
         clearSession();
-        joinCode = joinParam;
-        view = "join";
-        return;
+        joinCode = route.roomCode;
+        navigate({ name: "join", roomCode: route.roomCode }, true);
+        return cleanupRouteListeners;
     }
 
     if (saved && session) {
@@ -61,9 +83,22 @@ onMount(() => {
         localPlayerId = session.localPlayerId;
         roomCode = session.roomCode;
         isHost = session.isHost;
-        view = "game";
+
+        if (route.name === "room" && route.roomCode !== session.roomCode) {
+            navigate({ name: "join", roomCode: route.roomCode }, true);
+            return cleanupRouteListeners;
+        }
+
+        navigate({ name: "room", roomCode: session.roomCode }, true);
         void restoreSession(session.roomCode, session.playerName, session.localPlayerId, session.isHost, saved);
+    } else if (route.name === "room") {
+        joinCode = route.roomCode;
+        navigate({ name: "join", roomCode: route.roomCode }, true);
+    } else if (window.location.search) {
+        navigate(route, true);
     }
+
+    return cleanupRouteListeners;
 });
 
 onDestroy(() => {
@@ -250,7 +285,8 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
                 gameState = message.state;
                 localPlayerId = message.playerId;
                 roomCode = joinCode.trim() || roomCode;
-                view = "game";
+                isLoading = false;
+                navigate({ name: "room", roomCode });
                 saveGameState(gameState);
                 saveSession({
                     localPlayerId: message.playerId,
@@ -260,9 +296,10 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
                 });
             } else {
                 errorMessage = message.message || "Failed to join game";
+                isLoading = false;
                 peerManager?.disconnect();
                 peerManager = null;
-                view = "join";
+                navigate({ name: "join", roomCode: joinCode.trim() || undefined });
             }
             break;
         }
@@ -290,7 +327,7 @@ async function createGame() {
     }
 
     errorMessage = "";
-    view = "loading";
+    isLoading = true;
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
     isHost = true;
 
@@ -304,19 +341,21 @@ async function createGame() {
         peerManager.broadcastState(gameState);
         saveGameState(gameState);
         saveSession({ localPlayerId: peerId, isHost: true, roomCode, playerName });
-        view = "game";
+        isLoading = false;
+        navigate({ name: "room", roomCode });
 
         setTimeout(() => generateQRCode(roomCode), 100);
     } catch (_error) {
         errorMessage = "Failed to create game. Please try again.";
-        view = "home";
+        isLoading = false;
+        navigate({ name: "home" });
         isHost = false;
     }
 }
 
 async function generateQRCode(currentRoomCode: string) {
     if (!qrCanvas) return;
-    const url = `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(currentRoomCode)}`;
+    const url = `${window.location.origin}${window.location.pathname}#/join/${encodeURIComponent(currentRoomCode)}`;
     try {
         await QRCode.toCanvas(qrCanvas, url, { width: 200, margin: 2 });
     } catch (_error) {
@@ -335,7 +374,7 @@ async function joinGame() {
     }
 
     errorMessage = "";
-    view = "loading";
+    isLoading = true;
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
     isHost = false;
     roomCode = joinCode.trim();
@@ -343,16 +382,18 @@ async function joinGame() {
     try {
         await peerManager.joinGame(roomCode, playerName);
         setTimeout(() => {
-            if (view === "loading") {
+            if (isLoading) {
                 errorMessage = "Connection timed out. Please check the code and try again.";
-                view = "join";
+                isLoading = false;
+                navigate({ name: "join", roomCode });
                 peerManager?.disconnect();
                 peerManager = null;
             }
         }, 10000);
     } catch (_error) {
         errorMessage = "Failed to join game. Please check the code and try again.";
-        view = "join";
+        isLoading = false;
+        navigate({ name: "join", roomCode });
         peerManager = null;
     }
 }
@@ -366,7 +407,6 @@ function startGame() {
     startNewHand(gameState);
     peerManager?.broadcastState(gameState);
     saveGameState(gameState);
-    view = "game";
 }
 
 function performAction(action: "fold" | "check" | "call" | "raise" | "allin") {
@@ -516,7 +556,8 @@ function leaveGame() {
     localPlayerId = "";
     roomCode = "";
     joinCode = "";
-    view = "home";
+    isLoading = false;
+    navigate({ name: "home" });
     clearSession();
 }
 
@@ -533,7 +574,7 @@ function nextPhase() {
 </script>
 
 <main class="w-full max-w-5xl mx-auto p-4 min-h-screen text-white">
-    {#if view === "home"}
+    {#if route.name === "home" && !isLoading}
         <div class="py-10 md:py-14">
             <div class="mx-auto max-w-2xl rounded-[2rem] border border-white/10 bg-white/8 backdrop-blur-xl shadow-2xl p-8 md:p-10 text-center">
                 <div class="mb-8">
@@ -559,17 +600,17 @@ function nextPhase() {
                 {/if}
 
                 <div class="space-y-3">
-                    <button class="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-extrabold shadow-lg shadow-emerald-950/25 transition" onclick={() => view = "create"}>
+                    <button class="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-extrabold shadow-lg shadow-emerald-950/25 transition" onclick={() => navigate({ name: "create" })}>
                         Create Game
                     </button>
-                    <button class="w-full py-3.5 px-6 rounded-2xl bg-white/10 hover:bg-white/14 text-white font-bold ring-1 ring-white/10 transition" onclick={() => view = "join"}>
+                    <button class="w-full py-3.5 px-6 rounded-2xl bg-white/10 hover:bg-white/14 text-white font-bold ring-1 ring-white/10 transition" onclick={() => navigate({ name: "join" })}>
                         Join Game
                     </button>
                 </div>
             </div>
         </div>
 
-    {:else if view === "create"}
+    {:else if route.name === "create" && !isLoading}
         <div class="py-8">
             <div class="mx-auto max-w-2xl rounded-[2rem] border border-white/10 bg-white/8 backdrop-blur-xl shadow-2xl p-8">
                 <h2 class="text-3xl font-black mb-6 text-white">Create Game</h2>
@@ -633,14 +674,14 @@ function nextPhase() {
                     <button class="w-full py-3.5 bg-emerald-500 text-emerald-950 rounded-2xl hover:bg-emerald-400 transition font-extrabold shadow-lg shadow-emerald-950/25" onclick={createGame}>
                         Create Room
                     </button>
-                    <button class="w-full py-3 text-slate-300 hover:text-white transition rounded-2xl bg-white/5 hover:bg-white/10" onclick={() => view = "home"}>
+                    <button class="w-full py-3 text-slate-300 hover:text-white transition rounded-2xl bg-white/5 hover:bg-white/10" onclick={() => navigate({ name: "home" })}>
                         Back
                     </button>
                 </div>
             </div>
         </div>
 
-    {:else if view === "join"}
+    {:else if route.name === "join" && !isLoading}
         <div class="py-8">
             <div class="mx-auto max-w-2xl rounded-[2rem] border border-white/10 bg-white/8 backdrop-blur-xl shadow-2xl p-8">
                 <h2 class="text-3xl font-black mb-6 text-white">Join Game</h2>
@@ -676,20 +717,20 @@ function nextPhase() {
                     <button class="w-full py-3.5 bg-emerald-500 text-emerald-950 rounded-2xl hover:bg-emerald-400 transition font-extrabold shadow-lg shadow-emerald-950/25" onclick={joinGame}>
                         Join
                     </button>
-                    <button class="w-full py-3 text-slate-300 hover:text-white transition rounded-2xl bg-white/5 hover:bg-white/10" onclick={() => view = "home"}>
+                    <button class="w-full py-3 text-slate-300 hover:text-white transition rounded-2xl bg-white/5 hover:bg-white/10" onclick={() => navigate({ name: "home" })}>
                         Back
                     </button>
                 </div>
             </div>
         </div>
 
-    {:else if view === "loading"}
+    {:else if isLoading}
         <div class="flex flex-col items-center justify-center min-h-[50vh] rounded-[2rem] border border-white/10 bg-white/8 backdrop-blur-xl shadow-2xl">
             <div class="w-10 h-10 border-4 border-white/15 border-t-emerald-400 rounded-full animate-spin mb-4"></div>
             <p class="text-slate-200 font-medium">{isHost ? "Creating room..." : "Joining game..."}</p>
         </div>
 
-    {:else if view === "game"}
+    {:else if route.name === "room"}
         <div class="py-4">
             {#if gameState}
                 {#if gameState.phase === "waiting"}

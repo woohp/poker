@@ -4,6 +4,7 @@ import type { GameState, PeerMessage } from "./types";
 
 type MessageHandler = (message: PeerMessage, fromPeerId: string) => void;
 type ConnectionChangeHandler = (peerId: string, connected: boolean) => void;
+type WebtorrentDoc = ConstructorParameters<typeof WebtorrentProvider>[1];
 
 interface MessageEnvelope {
     id: string;
@@ -101,10 +102,14 @@ export class PeerManager {
             }
         });
 
-        this.provider = new WebtorrentProvider(this.roomCode, this.doc, {
-            trackers: TRACKER_URLS,
-            peerId: this.localPeerId,
-        });
+        this.provider = new WebtorrentProvider(
+            this.roomCode,
+            this.doc as unknown as WebtorrentDoc,
+            {
+                trackers: TRACKER_URLS,
+                peerId: this.localPeerId,
+            },
+        );
 
         this.provider.on("peers", (peerIds: unknown) => {
             this.handlePeerList(peerIds as string[]);
