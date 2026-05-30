@@ -18,6 +18,10 @@ export function getStablePeerId(): string {
         return cachedPeerId;
     }
 
+    return resetStablePeerId();
+}
+
+export function resetStablePeerId(): string {
     const peerId = createPeerId();
     sessionStorage.setItem(PEER_ID_STORAGE_KEY, encodePeerId(peerId));
     return peerId;

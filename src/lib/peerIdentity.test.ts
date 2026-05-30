@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-import { getStablePeerId, loadStablePeerId } from "./peerIdentity";
+import { getStablePeerId, loadStablePeerId, resetStablePeerId } from "./peerIdentity";
 
 function installSessionStorageMock() {
     const store = new Map<string, string>();
@@ -41,5 +41,14 @@ describe("peer identity", () => {
 
         expect(peerId).toHaveLength(20);
         expect(peerId).not.toBe("too-short");
+    });
+
+    it("can reset the stable peer id", () => {
+        const firstPeerId = getStablePeerId();
+        const nextPeerId = resetStablePeerId();
+
+        expect(nextPeerId).toHaveLength(20);
+        expect(nextPeerId).not.toBe(firstPeerId);
+        expect(loadStablePeerId()).toBe(nextPeerId);
     });
 });

@@ -18,7 +18,7 @@ import {
     saveSession,
     startNewHand,
 } from "./lib/gameLogic";
-import { getStablePeerId, loadStablePeerId } from "./lib/peerIdentity";
+import { getStablePeerId, loadStablePeerId, resetStablePeerId } from "./lib/peerIdentity";
 import { PeerManager } from "./lib/peerManager";
 import { navigate, parseRoute, type Route } from "./lib/router";
 import type { GameConfig, GameState, PeerMessage, Player } from "./lib/types";
@@ -70,6 +70,7 @@ onMount(() => {
 
     if (route.name === "join" && route.roomCode) {
         clearSession();
+        resetStablePeerId();
         joinCode = route.roomCode;
         navigate({ name: "join", roomCode: route.roomCode }, true);
         return cleanupListeners;
