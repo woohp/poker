@@ -247,14 +247,22 @@ describe("PeerManager", () => {
         expect(onMessage).toHaveBeenCalledWith({ type: "state", state }, "host");
     });
 
-    it("emits peer connect and disconnect changes from provider peer lists", async () => {
+    it("emits peer connect and disconnect changes from provider peer events", async () => {
         const onConnectionChange = vi.fn();
         const peerManager = new PeerManager(() => {}, onConnectionChange);
         await peerManager.createHost("host-5", "room-7");
 
         const provider = webtorrentMock.instances[0]!;
-        provider.emit("peers", ["peer-a", "peer-b"]);
-        provider.emit("peers", ["peer-b", "peer-c"]);
+        provider.emit("peers", {
+            added: ["peer-a", "peer-b"],
+            removed: [],
+            webrtcPeers: ["peer-a", "peer-b"],
+        });
+        provider.emit("peers", {
+            added: ["peer-c"],
+            removed: ["peer-a"],
+            webrtcPeers: ["peer-b", "peer-c"],
+        });
 
         expect(onConnectionChange.mock.calls).toEqual([
             ["peer-a", true],

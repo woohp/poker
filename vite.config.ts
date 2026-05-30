@@ -3,6 +3,9 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
+    resolve: {
+        dedupe: ["yjs"],
+    },
     fmt: {
         ignorePatterns: ["docs/**", "dist/**", "node_modules/**"],
         tabWidth: 4,

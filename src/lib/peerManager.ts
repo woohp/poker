@@ -111,8 +111,8 @@ export class PeerManager {
             },
         );
 
-        this.provider.on("peers", (peerIds: unknown) => {
-            this.handlePeerList(peerIds as string[]);
+        this.provider.on("peers", (event: unknown) => {
+            this.handlePeerList(getPeerIds(event));
         });
 
         this.provider.on("connection-error", (error: unknown) => {
@@ -226,6 +226,21 @@ export class PeerManager {
         this.knownMessageCount = 0;
         this.connectedPeerIds.clear();
     }
+}
+
+function getPeerIds(event: unknown): string[] {
+    if (Array.isArray(event)) {
+        return event.filter((peerId): peerId is string => typeof peerId === "string");
+    }
+
+    if (event && typeof event === "object" && "webrtcPeers" in event) {
+        const peerIds = (event as { webrtcPeers: unknown }).webrtcPeers;
+        if (Array.isArray(peerIds)) {
+            return peerIds.filter((peerId): peerId is string => typeof peerId === "string");
+        }
+    }
+
+    return [];
 }
 
 function randomId(length: number): string {
