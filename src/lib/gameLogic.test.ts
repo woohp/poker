@@ -82,14 +82,12 @@ beforeEach(() => {
 describe("session and game persistence", () => {
     it("saves and loads session data", () => {
         saveSession({
-            localPlayerId: "p1",
             isHost: true,
             roomCode: "ROOM123",
             playerName: "Host",
         });
 
         expect(loadSession()).toEqual({
-            localPlayerId: "p1",
             isHost: true,
             roomCode: "ROOM123",
             playerName: "Host",

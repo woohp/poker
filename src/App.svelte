@@ -18,6 +18,7 @@ import {
     saveSession,
     startNewHand,
 } from "./lib/gameLogic";
+import { getStablePeerId, loadStablePeerId } from "./lib/peerIdentity";
 import { PeerManager } from "./lib/peerManager";
 import { navigate, parseRoute, type Route } from "./lib/router";
 import type { GameConfig, GameState, PeerMessage, Player } from "./lib/types";
@@ -58,39 +59,42 @@ onMount(() => {
         }
     }
 
-    function cleanupRouteListeners() {
+    function cleanupListeners() {
         window.removeEventListener("hashchange", syncRoute);
         window.removeEventListener("popstate", syncRoute);
+        window.removeEventListener("beforeunload", disconnectPeerManager);
     }
 
     syncRoute();
     window.addEventListener("hashchange", syncRoute);
     window.addEventListener("popstate", syncRoute);
+    window.addEventListener("beforeunload", disconnectPeerManager);
 
     const saved = loadGameState();
     const session = loadSession();
+    const savedPeerId = loadStablePeerId();
 
     if (route.name === "join" && route.roomCode) {
         clearSession();
         joinCode = route.roomCode;
         navigate({ name: "join", roomCode: route.roomCode }, true);
-        return cleanupRouteListeners;
+        return cleanupListeners;
     }
 
-    if (saved && session) {
+    if (saved && session && savedPeerId) {
         gameState = saved;
         playerName = session.playerName;
-        localPlayerId = session.localPlayerId;
+        localPlayerId = savedPeerId;
         roomCode = session.roomCode;
         isHost = session.isHost;
 
         if (route.name === "room" && route.roomCode !== session.roomCode) {
             navigate({ name: "join", roomCode: route.roomCode }, true);
-            return cleanupRouteListeners;
+            return cleanupListeners;
         }
 
         navigate({ name: "room", roomCode: session.roomCode }, true);
-        void restoreSession(session.roomCode, session.playerName, session.localPlayerId, session.isHost, saved);
+        void restoreSession(session.roomCode, session.playerName, savedPeerId, session.isHost, saved);
     } else if (route.name === "room") {
         joinCode = route.roomCode;
         navigate({ name: "join", roomCode: route.roomCode }, true);
@@ -98,11 +102,11 @@ onMount(() => {
         navigate(route, true);
     }
 
-    return cleanupRouteListeners;
+    return cleanupListeners;
 });
 
 onDestroy(() => {
-    peerManager?.disconnect();
+    disconnectPeerManager();
 });
 
 $effect(() => {
@@ -157,6 +161,11 @@ $effect(() => {
     }
 });
 
+function disconnectPeerManager() {
+    peerManager?.disconnect();
+    peerManager = null;
+}
+
 async function restoreSession(
     savedRoomCode: string,
     savedPlayerName: string,
@@ -164,7 +173,7 @@ async function restoreSession(
     savedIsHost: boolean,
     savedState: GameState,
 ) {
-    peerManager?.disconnect();
+    disconnectPeerManager();
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
 
     try {
@@ -289,7 +298,6 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
                 navigate({ name: "room", roomCode });
                 saveGameState(gameState);
                 saveSession({
-                    localPlayerId: message.playerId,
                     isHost: false,
                     roomCode,
                     playerName,
@@ -297,8 +305,7 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
             } else {
                 errorMessage = message.message || "Failed to join game";
                 isLoading = false;
-                peerManager?.disconnect();
-                peerManager = null;
+                disconnectPeerManager();
                 navigate({ name: "join", roomCode: joinCode.trim() || undefined });
             }
             break;
@@ -332,7 +339,8 @@ async function createGame() {
     isHost = true;
 
     try {
-        const peerId = await peerManager.createHost();
+        const peerId = getStablePeerId();
+        await peerManager.createHost(peerId);
         localPlayerId = peerId;
         roomCode = peerManager.getRoomCode();
 
@@ -340,7 +348,7 @@ async function createGame() {
         gameState = createInitialGameState(config, playerName, peerId);
         peerManager.broadcastState(gameState);
         saveGameState(gameState);
-        saveSession({ localPlayerId: peerId, isHost: true, roomCode, playerName });
+        saveSession({ isHost: true, roomCode, playerName });
         isLoading = false;
         navigate({ name: "room", roomCode });
 
@@ -380,21 +388,22 @@ async function joinGame() {
     roomCode = joinCode.trim();
 
     try {
-        await peerManager.joinGame(roomCode, playerName);
+        const peerId = getStablePeerId();
+        localPlayerId = peerId;
+        await peerManager.joinGame(roomCode, playerName, peerId);
         setTimeout(() => {
             if (isLoading) {
                 errorMessage = "Connection timed out. Please check the code and try again.";
                 isLoading = false;
                 navigate({ name: "join", roomCode });
-                peerManager?.disconnect();
-                peerManager = null;
+                disconnectPeerManager();
             }
         }, 10000);
     } catch (_error) {
         errorMessage = "Failed to join game. Please check the code and try again.";
         isLoading = false;
         navigate({ name: "join", roomCode });
-        peerManager = null;
+        disconnectPeerManager();
     }
 }
 
@@ -549,8 +558,7 @@ async function copyJoinCode() {
 }
 
 function leaveGame() {
-    peerManager?.disconnect();
-    peerManager = null;
+    disconnectPeerManager();
     gameState = null;
     isHost = false;
     localPlayerId = "";

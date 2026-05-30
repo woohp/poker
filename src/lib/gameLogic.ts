@@ -9,7 +9,6 @@ const STORAGE_KEY = "poker_game_state";
 const SESSION_KEY = "poker_session";
 
 export interface SessionData {
-    localPlayerId: string;
     isHost: boolean;
     roomCode: string;
     playerName: string;
