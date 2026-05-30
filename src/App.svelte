@@ -47,13 +47,7 @@ let autoCheckRequested = $state(false);
 
 onMount(() => {
     function syncRoute() {
-        const nextRoute = parseRoute(window.location.hash, window.location.search);
-        if (gameState && nextRoute.name !== "room" && !isLoading) {
-            navigate({ name: "room", roomCode }, true);
-            return;
-        }
-
-        route = nextRoute;
+        route = parseRoute(window.location.hash);
         if (route.name === "join" && route.roomCode) {
             joinCode = route.roomCode;
         }
@@ -81,25 +75,18 @@ onMount(() => {
         return cleanupListeners;
     }
 
-    if (saved && session && savedPeerId) {
-        gameState = saved;
-        playerName = session.playerName;
-        localPlayerId = savedPeerId;
-        roomCode = session.roomCode;
-        isHost = session.isHost;
-
-        if (route.name === "room" && route.roomCode !== session.roomCode) {
+    if (route.name === "room") {
+        if (saved && session && savedPeerId && route.roomCode === session.roomCode) {
+            gameState = saved;
+            playerName = session.playerName;
+            localPlayerId = savedPeerId;
+            roomCode = session.roomCode;
+            isHost = session.isHost;
+            void restoreSession(session.roomCode, session.playerName, savedPeerId, session.isHost, saved);
+        } else {
+            joinCode = route.roomCode;
             navigate({ name: "join", roomCode: route.roomCode }, true);
-            return cleanupListeners;
         }
-
-        navigate({ name: "room", roomCode: session.roomCode }, true);
-        void restoreSession(session.roomCode, session.playerName, savedPeerId, session.isHost, saved);
-    } else if (route.name === "room") {
-        joinCode = route.roomCode;
-        navigate({ name: "join", roomCode: route.roomCode }, true);
-    } else if (window.location.search) {
-        navigate(route, true);
     }
 
     return cleanupListeners;

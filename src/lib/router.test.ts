@@ -17,10 +17,6 @@ describe("router", () => {
         expect(parseRoute("#/room/ABC123")).toEqual({ name: "room", roomCode: "ABC123" });
     });
 
-    it("supports legacy query invite links", () => {
-        expect(parseRoute("", "?join=ABC123")).toEqual({ name: "join", roomCode: "ABC123" });
-    });
-
     it("falls back to home for unknown routes", () => {
         expect(parseRoute("#/wat")).toEqual({ name: "home" });
         expect(parseRoute("#/room")).toEqual({ name: "home" });

@@ -4,12 +4,7 @@ export type Route =
     | { name: "join"; roomCode?: string }
     | { name: "room"; roomCode: string };
 
-export function parseRoute(hash: string, search = ""): Route {
-    const legacyJoinCode = new URLSearchParams(search).get("join");
-    if (legacyJoinCode) {
-        return { name: "join", roomCode: legacyJoinCode };
-    }
-
+export function parseRoute(hash: string): Route {
     const path = hash.startsWith("#") ? hash.slice(1) : hash;
     const segments = path
         .split("/")
