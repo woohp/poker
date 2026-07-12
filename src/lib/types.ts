@@ -67,6 +67,12 @@ export interface ActionMessage {
     amount?: number;
 }
 
+export interface HoleCardsRequestMessage {
+    type: "requestHoleCards";
+    playerId: string;
+    round: number;
+}
+
 export interface HoleCardsMessage {
     type: "holeCards";
     round: number;
@@ -94,6 +100,7 @@ export interface JoinResponseMessage {
 
 export type PeerMessage =
     | ActionMessage
+    | HoleCardsRequestMessage
     | HoleCardsMessage
     | StateUpdateMessage
     | JoinRequestMessage

@@ -47,6 +47,7 @@ let copySuccess = $state(false);
 let showdownSelections: Record<number, string[]> = $state({});
 let autoCheckRequested = $state(false);
 let localHoleCards: Card[] = $state([]);
+let localHoleRound = $state(0);
 let hostDeck: Card[] = [];
 let hostHoleCards = new Map<string, Card[]>();
 const DEALER_STORAGE_KEY = "poker_private_dealer_state";
@@ -251,6 +252,12 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             break;
         }
 
+        case "requestHoleCards": {
+            if (message.playerId === fromPeerId && message.round === gameState.round) {
+                sendHoleCards(message.playerId);
+            }
+            break;
+        }
         case "action": {
             applyHostAction(message.playerId, message.action, message.amount);
             break;
@@ -285,12 +292,21 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
         case "holeCards": {
             if (!gameState || message.round >= gameState.round) {
                 localHoleCards = message.cards;
+                localHoleRound = message.round;
             }
             break;
         }
         case "state": {
             gameState = message.state;
             saveGameState(gameState);
+            if (localHoleRound !== gameState.round) localHoleCards = [];
+            if (
+                gameState.config.mode === "digital" &&
+                gameState.phase !== "waiting" &&
+                localHoleRound !== gameState.round
+            ) {
+                requestHoleCards();
+            }
             break;
         }
         case "joinResponse": {
@@ -318,13 +334,14 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
 }
 
 function handleConnectionChange(peerId: string, connected: boolean) {
-    if (connected || !isHost || !gameState) {
+    if (!gameState) return;
+
+    if (!isHost && connected && gameState.config.mode === "digital") {
+        requestHoleCards();
         return;
     }
 
-    if (gameState.phase !== "waiting") {
-        return;
-    }
+    if (connected || !isHost || gameState.phase !== "waiting") return;
 
     removePlayer(gameState, peerId);
     peerManager?.broadcastState(gameState);
@@ -424,6 +441,7 @@ function startHand() {
     if (!gameState) return;
     startNewHand(gameState);
     localHoleCards = [];
+    localHoleRound = 0;
 
     if (gameState.config.mode === "digital" && gameState.phase === "preflop") {
         hostDeck = createShuffledDeck();
@@ -458,21 +476,36 @@ function restoreDealerState(round: number) {
             hostDeck = saved.deck;
             hostHoleCards = new Map(saved.hands);
             localHoleCards = hostHoleCards.get(localPlayerId) || [];
+            localHoleRound = round;
         }
     } catch {
         localStorage.removeItem(DEALER_STORAGE_KEY);
     }
 }
 
+function requestHoleCards() {
+    if (!gameState || isHost) return;
+    const hostId = gameState.players.find((player) => player.isHost)?.id;
+    if (!hostId) return;
+    peerManager?.sendToPeer(hostId, {
+        type: "requestHoleCards",
+        playerId: localPlayerId,
+        round: gameState.round,
+    });
+}
+
 function sendHoleCards(playerId: string) {
     if (!gameState || gameState.config.mode !== "digital") return;
     const cards = hostHoleCards.get(playerId);
     if (!cards) return;
-    if (playerId === localPlayerId) localHoleCards = cards;
+    if (playerId === localPlayerId) {
+        localHoleCards = cards;
+        localHoleRound = gameState.round;
+    }
     else {
         const message = { type: "holeCards" as const, round: gameState.round, cards };
         if (!peerManager?.sendPrivateToPeer(playerId, message)) {
-            setTimeout(() => peerManager?.sendPrivateToPeer(playerId, message), 250);
+            setTimeout(() => peerManager?.sendPrivateToPeer(playerId, message), 500);
         }
     }
 }
@@ -920,11 +953,11 @@ function nextPhase() {
                             <div class="flex gap-2 justify-center mb-6 min-h-16">
                                 {#if gameState.config.mode === "digital"}
                                     {#each gameState.communityCards as card}
-                                        <div class={`w-12 h-16 bg-white rounded flex items-center justify-center text-xl font-black shadow-md ring-1 ring-black/5 ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
+                                        <div class={`w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-xl md:text-3xl font-black shadow-md ring-1 ring-black/5 ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
                                     {/each}
                                 {:else}
                                     {#each Array(gameState.phase === "flop" ? 3 : gameState.phase === "turn" ? 4 : gameState.phase === "river" || gameState.phase === "showdown" ? 5 : 0) as _}
-                                        <div class="w-12 h-16 bg-white rounded flex items-center justify-center text-2xl text-slate-400 shadow-md ring-1 ring-black/5">?</div>
+                                        <div class="w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-2xl md:text-3xl text-slate-400 shadow-md ring-1 ring-black/5">?</div>
                                     {/each}
                                 {/if}
                             </div>
@@ -934,7 +967,7 @@ function nextPhase() {
                                     <span class="text-xs uppercase tracking-[0.18em] text-white/75 font-bold mb-2">Your hand</span>
                                     <div class="flex gap-2">
                                         {#each localHoleCards as card}
-                                            <div class={`w-14 h-20 bg-white rounded-lg flex items-center justify-center text-2xl font-black shadow-lg ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
+                                            <div class={`w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-xl md:text-3xl font-black shadow-lg ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
                                         {/each}
                                     </div>
                                 </div>
