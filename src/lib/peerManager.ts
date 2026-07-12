@@ -13,7 +13,10 @@ interface MessageEnvelope {
     message: Exclude<PeerMessage, { type: "state" }>;
 }
 
-const TRACKER_URLS = ["wss://tracker.openwebtorrent.com", "wss://tracker.webtorrent.dev"];
+const DEFAULT_TRACKER_URLS = ["wss://tracker.openwebtorrent.com", "wss://tracker.webtorrent.dev"];
+const TRACKER_URLS = import.meta.env.VITE_TRACKER_URLS
+    ? import.meta.env.VITE_TRACKER_URLS.split(",").map((url: string) => url.trim())
+    : DEFAULT_TRACKER_URLS;
 const RTC_CONFIG: RTCConfiguration = {
     iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
