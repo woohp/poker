@@ -56,13 +56,13 @@ onMount(() => {
     function cleanupListeners() {
         window.removeEventListener("hashchange", syncRoute);
         window.removeEventListener("popstate", syncRoute);
-        window.removeEventListener("beforeunload", disconnectPeerManager);
+        window.removeEventListener("pagehide", announceDeparture);
     }
 
     syncRoute();
     window.addEventListener("hashchange", syncRoute);
     window.addEventListener("popstate", syncRoute);
-    window.addEventListener("beforeunload", disconnectPeerManager);
+    window.addEventListener("pagehide", announceDeparture);
 
     const saved = loadGameState();
     const session = loadSession();
@@ -148,6 +148,10 @@ $effect(() => {
         autoCheckRequested = false;
     }
 });
+
+function announceDeparture() {
+    peerManager?.announceDeparture();
+}
 
 function disconnectPeerManager() {
     peerManager?.disconnect();
@@ -302,7 +306,7 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
 }
 
 function handleConnectionChange(peerId: string, connected: boolean) {
-    if (!connected || !isHost || !gameState) {
+    if (connected || !isHost || !gameState) {
         return;
     }
 
@@ -545,7 +549,9 @@ async function copyJoinCode() {
     }
 }
 
-function leaveGame() {
+async function leaveGame() {
+    announceDeparture();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     disconnectPeerManager();
     gameState = null;
     isHost = false;

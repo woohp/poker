@@ -118,8 +118,9 @@ export class PeerManager {
             },
         );
 
-        this.provider.on("peers", (event: unknown) => {
-            this.handlePeerList(getPeerIds(event));
+        this.provider.awareness.setLocalState({ peerId: this.localPeerId });
+        this.provider.awareness.on("change", () => {
+            this.handlePeerList(this.getAwarenessPeerIds());
         });
 
         this.provider.on("connection-error", (error: unknown) => {
@@ -161,6 +162,19 @@ export class PeerManager {
                 console.error("Failed to parse room message:", error);
             }
         }
+    }
+
+    private getAwarenessPeerIds(): string[] {
+        if (!this.provider) {
+            return [];
+        }
+
+        return Array.from(this.provider.awareness.getStates().values())
+            .map((state) => state["peerId"])
+            .filter(
+                (peerId): peerId is string =>
+                    typeof peerId === "string" && peerId !== this.localPeerId,
+            );
     }
 
     private handlePeerList(peerIds: string[]): void {
@@ -223,7 +237,12 @@ export class PeerManager {
         return this.isHost;
     }
 
+    announceDeparture(): void {
+        this.provider?.awareness.setLocalState(null);
+    }
+
     disconnect(): void {
+        this.announceDeparture();
         this.provider?.destroy();
         this.provider = null;
         this.doc?.destroy();
@@ -233,21 +252,6 @@ export class PeerManager {
         this.knownMessageCount = 0;
         this.connectedPeerIds.clear();
     }
-}
-
-function getPeerIds(event: unknown): string[] {
-    if (Array.isArray(event)) {
-        return event.filter((peerId): peerId is string => typeof peerId === "string");
-    }
-
-    if (event && typeof event === "object" && "webrtcPeers" in event) {
-        const peerIds = (event as { webrtcPeers: unknown }).webrtcPeers;
-        if (Array.isArray(peerIds)) {
-            return peerIds.filter((peerId): peerId is string => typeof peerId === "string");
-        }
-    }
-
-    return [];
 }
 
 function randomId(length: number): string {

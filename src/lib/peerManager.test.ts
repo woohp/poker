@@ -7,11 +7,42 @@ interface MockProviderInstance {
     doc: Y.Doc;
     opts: { peerId?: string; rtcConfig?: RTCConfiguration };
     handlers: Map<string, Array<(payload: unknown) => void>>;
+    awareness: MockAwareness;
     destroyed: boolean;
     ready: Promise<void>;
     on: (event: string, handler: (payload: unknown) => void) => void;
     emit: (event: string, payload: unknown) => void;
     destroy: () => void;
+}
+
+class MockAwareness {
+    private states = new Map<number, Record<string, unknown>>();
+    private handlers: Array<() => void> = [];
+
+    setLocalState(state: Record<string, unknown> | null): void {
+        if (state) this.states.set(1, state);
+        else this.states.delete(1);
+        this.emitChange();
+    }
+
+    setRemotePeerIds(peerIds: string[]): void {
+        const localState = this.states.get(1);
+        this.states = new Map(peerIds.map((peerId, index) => [index + 2, { peerId }]));
+        if (localState) this.states.set(1, localState);
+        this.emitChange();
+    }
+
+    getStates(): Map<number, Record<string, unknown>> {
+        return this.states;
+    }
+
+    on(_event: "change", handler: () => void): void {
+        this.handlers.push(handler);
+    }
+
+    private emitChange(): void {
+        for (const handler of this.handlers) handler();
+    }
 }
 
 const webtorrentMock = vi.hoisted(() => ({
@@ -24,6 +55,7 @@ vi.mock("y-webtorrent", async () => {
         doc: Y.Doc;
         opts: { peerId?: string; rtcConfig?: RTCConfiguration };
         handlers = new Map<string, Array<(payload: unknown) => void>>();
+        awareness = new MockAwareness();
         destroyed = false;
         ready = Promise.resolve();
 
@@ -255,22 +287,14 @@ describe("PeerManager", () => {
         expect(onMessage).toHaveBeenCalledWith({ type: "state", state }, "host");
     });
 
-    it("emits peer connect and disconnect changes from provider peer events", async () => {
+    it("emits peer connect and disconnect changes from awareness", async () => {
         const onConnectionChange = vi.fn();
         const peerManager = new PeerManager(() => {}, onConnectionChange);
         await peerManager.createHost("host-5", "room-7");
 
         const provider = webtorrentMock.instances[0]!;
-        provider.emit("peers", {
-            added: ["peer-a", "peer-b"],
-            removed: [],
-            webrtcPeers: ["peer-a", "peer-b"],
-        });
-        provider.emit("peers", {
-            added: ["peer-c"],
-            removed: ["peer-a"],
-            webrtcPeers: ["peer-b", "peer-c"],
-        });
+        provider.awareness.setRemotePeerIds(["peer-a", "peer-b"]);
+        provider.awareness.setRemotePeerIds(["peer-b", "peer-c"]);
 
         expect(onConnectionChange.mock.calls).toEqual([
             ["peer-a", true],
