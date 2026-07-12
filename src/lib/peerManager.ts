@@ -41,6 +41,7 @@ export class PeerManager {
     private isHost = false;
     private knownMessageCount = 0;
     private connectedPeerIds: Set<string> = new Set();
+    private wrappedPrivatePeers: Set<string> = new Set();
 
     constructor(onMessage: MessageHandler, onConnectionChange: ConnectionChangeHandler) {
         this.onMessage = onMessage;
@@ -120,6 +121,7 @@ export class PeerManager {
 
         this.provider.awareness.setLocalState({ peerId: this.localPeerId });
         this.provider.awareness.on("change", () => {
+            this.installPrivateMessageHandlers();
             this.handlePeerList(this.getAwarenessPeerIds());
         });
 
@@ -164,6 +166,35 @@ export class PeerManager {
         }
     }
 
+    private installPrivateMessageHandlers(): void {
+        if (!this.provider) return;
+        for (const [peerId, peer] of this.provider.peers) {
+            if (this.wrappedPrivatePeers.has(peerId)) continue;
+            const mutablePeer = peer as unknown as {
+                onMessage: (peer: unknown, data: ArrayBuffer) => void;
+                remotePeerId: string | null;
+            };
+            const originalHandler = mutablePeer.onMessage;
+            mutablePeer.onMessage = (source, data) => {
+                const bytes = new Uint8Array(data);
+                if (bytes[0] !== 4) {
+                    originalHandler(source, data);
+                    return;
+                }
+                try {
+                    const message = JSON.parse(new TextDecoder().decode(bytes.slice(1))) as Exclude<
+                        PeerMessage,
+                        { type: "state" }
+                    >;
+                    this.onMessage(message, mutablePeer.remotePeerId || peerId);
+                } catch (error) {
+                    console.error("Failed to parse private peer message:", error);
+                }
+            };
+            this.wrappedPrivatePeers.add(peerId);
+        }
+    }
+
     private getAwarenessPeerIds(): string[] {
         if (!this.provider) {
             return [];
@@ -193,6 +224,17 @@ export class PeerManager {
         }
 
         this.connectedPeerIds = nextPeerIds;
+    }
+
+    sendPrivateToPeer(peerId: string, message: Exclude<PeerMessage, { type: "state" }>): boolean {
+        const peer = this.provider?.peers.get(peerId);
+        if (!peer?.connected) return false;
+        const payload = new TextEncoder().encode(JSON.stringify(message));
+        const packet = new Uint8Array(payload.length + 1);
+        packet[0] = 4;
+        packet.set(payload, 1);
+        peer.send(packet);
+        return true;
     }
 
     sendToPeer(peerId: string, message: Exclude<PeerMessage, { type: "state" }>): void {
@@ -251,6 +293,7 @@ export class PeerManager {
         this.stateMap = null;
         this.knownMessageCount = 0;
         this.connectedPeerIds.clear();
+        this.wrappedPrivatePeers.clear();
     }
 }
 

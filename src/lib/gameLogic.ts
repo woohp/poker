@@ -50,8 +50,8 @@ export function createInitialGameState(
         currentBet: 0,
         minRaise: config.bigBlind,
         round: 0,
-        deck: [],
         communityCards: [],
+        revealedHands: [],
         config,
         statusMessage: "Waiting for players",
         lastPayouts: [],
@@ -308,6 +308,7 @@ export function startNewHand(state: GameState): void {
     state.minRaise = state.config.bigBlind;
     state.round += 1;
     state.communityCards = [];
+    state.revealedHands = [];
     state.lastPayouts = [];
 
     for (const player of state.players) {
@@ -359,15 +360,12 @@ export function advancePhase(state: GameState): void {
     switch (state.phase) {
         case "preflop":
             state.phase = "flop";
-            state.communityCards = [0, 0, 0];
             break;
         case "flop":
             state.phase = "turn";
-            state.communityCards = [...state.communityCards, 0];
             break;
         case "turn":
             state.phase = "river";
-            state.communityCards = [...state.communityCards, 0];
             break;
         case "river":
             state.phase = "showdown";

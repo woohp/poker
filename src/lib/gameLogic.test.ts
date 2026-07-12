@@ -24,6 +24,7 @@ import {
 import type { GameConfig, GameState } from "./types";
 
 const config: GameConfig = {
+    mode: "physical",
     startingChips: 1000,
     smallBlind: 5,
     bigBlind: 10,
@@ -289,7 +290,7 @@ describe("betting round completion and phase progression", () => {
         expect(isBettingRoundComplete(state)).toBe(true);
     });
 
-    it("advances phases, resets bets/acted state, and adds community placeholders", () => {
+    it("advances phases and resets bets and acted state", () => {
         const state = createState(3);
         startNewHand(state);
         processAction(state, "p2", "call");
@@ -298,16 +299,16 @@ describe("betting round completion and phase progression", () => {
 
         advancePhase(state);
         expect(state.phase).toBe("flop");
-        expect(state.communityCards).toEqual([0, 0, 0]);
+        expect(state.communityCards).toEqual([]);
         expect(currentPlayerId(state)).toBe("p3");
 
         advancePhase(state);
         expect(state.phase).toBe("turn");
-        expect(state.communityCards).toEqual([0, 0, 0, 0]);
+        expect(state.communityCards).toEqual([]);
 
         advancePhase(state);
         expect(state.phase).toBe("river");
-        expect(state.communityCards).toEqual([0, 0, 0, 0, 0]);
+        expect(state.communityCards).toEqual([]);
 
         advancePhase(state);
         expect(state.phase).toBe("showdown");

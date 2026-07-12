@@ -20,8 +20,9 @@ import {
 } from "./lib/gameLogic";
 import { getStablePeerId, loadStablePeerId, resetStablePeerId } from "./lib/peerIdentity";
 import { PeerManager } from "./lib/peerManager";
+import { compareHands, createShuffledDeck, evaluateHand, formatCard } from "./lib/poker";
 import { navigate, parseRoute, type Route } from "./lib/router";
-import type { GameConfig, GameState, PeerMessage, Player } from "./lib/types";
+import type { Card, GameConfig, GameMode, GameState, PeerMessage, Player } from "./lib/types";
 
 let route: Route = $state({ name: "home" });
 let isLoading = $state(false);
@@ -37,6 +38,7 @@ let startingChips = $state(1000);
 let smallBlind = $state(5);
 let bigBlind = $state(10);
 let ante = $state(0);
+let gameMode: GameMode = $state("physical");
 
 let isHost = $state(false);
 let localPlayerId = $state("");
@@ -44,6 +46,10 @@ let raiseAmount = $state(0);
 let copySuccess = $state(false);
 let showdownSelections: Record<number, string[]> = $state({});
 let autoCheckRequested = $state(false);
+let localHoleCards: Card[] = $state([]);
+let hostDeck: Card[] = [];
+let hostHoleCards = new Map<string, Card[]>();
+const DEALER_STORAGE_KEY = "poker_private_dealer_state";
 
 onMount(() => {
     function syncRoute() {
@@ -170,6 +176,7 @@ async function restoreSession(
 
     try {
         if (savedIsHost) {
+            restoreDealerState(savedState.round);
             await peerManager.createHost(savedPeerId, savedRoomCode);
             peerManager.broadcastState(savedState);
             setTimeout(() => generateQRCode(savedRoomCode), 100);
@@ -202,6 +209,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
                     playerId: existing.id,
                     state: gameState,
                 });
+                sendHoleCards(existing.id);
                 return;
             }
 
@@ -266,9 +274,7 @@ function applyHostAction(playerId: string, action: "fold" | "check" | "call" | "
         setTimeout(() => {
             const gs = gameState;
             if (gs && gs.phase !== "showdown") {
-                advancePhase(gs);
-                peerManager?.broadcastState(gs);
-                saveGameState(gs);
+                advanceHostPhase();
             }
         }, 1000);
     }
@@ -276,6 +282,12 @@ function applyHostAction(playerId: string, action: "fold" | "check" | "call" | "
 
 function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
     switch (message.type) {
+        case "holeCards": {
+            if (!gameState || message.round >= gameState.round) {
+                localHoleCards = message.cards;
+            }
+            break;
+        }
         case "state": {
             gameState = message.state;
             saveGameState(gameState);
@@ -336,7 +348,7 @@ async function createGame() {
         localPlayerId = peerId;
         roomCode = peerManager.getRoomCode();
 
-        const config: GameConfig = { startingChips, smallBlind, bigBlind, ante };
+        const config: GameConfig = { mode: gameMode, startingChips, smallBlind, bigBlind, ante };
         gameState = createInitialGameState(config, playerName, peerId);
         peerManager.broadcastState(gameState);
         saveGameState(gameState);
@@ -405,9 +417,109 @@ function startGame() {
         errorMessage = "Need at least 2 players to start";
         return;
     }
+    startHand();
+}
+
+function startHand() {
+    if (!gameState) return;
     startNewHand(gameState);
+    localHoleCards = [];
+
+    if (gameState.config.mode === "digital" && gameState.phase === "preflop") {
+        hostDeck = createShuffledDeck();
+        hostHoleCards = new Map();
+        for (const player of gameState.players.filter((entry) => entry.isActive)) {
+            hostHoleCards.set(player.id, [hostDeck.pop()!, hostDeck.pop()!]);
+        }
+        for (const playerId of hostHoleCards.keys()) sendHoleCards(playerId);
+        saveDealerState();
+    }
+
     peerManager?.broadcastState(gameState);
     saveGameState(gameState);
+}
+
+function saveDealerState() {
+    if (!gameState || !isHost) return;
+    localStorage.setItem(
+        DEALER_STORAGE_KEY,
+        JSON.stringify({ round: gameState.round, deck: hostDeck, hands: [...hostHoleCards] }),
+    );
+}
+
+function restoreDealerState(round: number) {
+    try {
+        const saved = JSON.parse(localStorage.getItem(DEALER_STORAGE_KEY) || "null") as {
+            round: number;
+            deck: Card[];
+            hands: Array<[string, Card[]]>;
+        } | null;
+        if (saved?.round === round) {
+            hostDeck = saved.deck;
+            hostHoleCards = new Map(saved.hands);
+            localHoleCards = hostHoleCards.get(localPlayerId) || [];
+        }
+    } catch {
+        localStorage.removeItem(DEALER_STORAGE_KEY);
+    }
+}
+
+function sendHoleCards(playerId: string) {
+    if (!gameState || gameState.config.mode !== "digital") return;
+    const cards = hostHoleCards.get(playerId);
+    if (!cards) return;
+    if (playerId === localPlayerId) localHoleCards = cards;
+    else {
+        const message = { type: "holeCards" as const, round: gameState.round, cards };
+        if (!peerManager?.sendPrivateToPeer(playerId, message)) {
+            setTimeout(() => peerManager?.sendPrivateToPeer(playerId, message), 250);
+        }
+    }
+}
+
+function advanceHostPhase() {
+    if (!gameState) return;
+    const previousPhase = gameState.phase;
+    advancePhase(gameState);
+    if (gameState.config.mode === "digital") {
+        const drawCount = previousPhase === "preflop" ? 3 : previousPhase === "flop" || previousPhase === "turn" ? 1 : 0;
+        for (let index = 0; index < drawCount; index++) gameState.communityCards.push(hostDeck.pop()!);
+        saveDealerState();
+        if (gameState.phase === "showdown") settleDigitalShowdown();
+    }
+    peerManager?.broadcastState(gameState);
+    saveGameState(gameState);
+}
+
+function settleDigitalShowdown() {
+    if (!gameState || gameState.pot === 0) return;
+    const pots = calculatePotAllocations(gameState);
+    const winnersByPot = pots.map((pot) => {
+        const eligible = pot.eligiblePlayerIds.filter((id) => hostHoleCards.has(id));
+        let winners: string[] = [];
+        for (const playerId of eligible) {
+            if (winners.length === 0) winners = [playerId];
+            else {
+                const comparison = compareHands(
+                    [...hostHoleCards.get(playerId)!, ...gameState!.communityCards],
+                    [...hostHoleCards.get(winners[0]!)!, ...gameState!.communityCards],
+                );
+                if (comparison > 0) winners = [playerId];
+                else if (comparison === 0) winners.push(playerId);
+            }
+        }
+        return winners;
+    });
+    const revealedIds = new Set(winnersByPot.flat());
+    gameState.revealedHands = [...revealedIds].map((playerId) => {
+        const cards = hostHoleCards.get(playerId)!;
+        return {
+            playerId,
+            cards,
+            handName: evaluateHand([...cards, ...gameState!.communityCards]).name,
+        };
+    });
+    applyPotWinners(gameState, winnersByPot);
 }
 
 function performAction(action: "fold" | "check" | "call" | "raise" | "allin") {
@@ -566,12 +678,10 @@ async function leaveGame() {
 function nextPhase() {
     if (!gameState || !isHost) return;
     if (gameState.phase === "showdown") {
-        startNewHand(gameState);
+        startHand();
     } else {
-        advancePhase(gameState);
+        advanceHostPhase();
     }
-    peerManager?.broadcastState(gameState);
-    saveGameState(gameState);
 }
 </script>
 
@@ -619,6 +729,11 @@ function nextPhase() {
 
                 <div class="bg-slate-950/45 border border-white/10 p-5 rounded-2xl mb-5">
                     <h3 class="font-bold mb-4 text-slate-100">Game Settings</h3>
+
+                    <div class="grid grid-cols-2 gap-2 mb-5">
+                        <button type="button" class={`rounded-xl px-3 py-3 font-bold ring-1 ${gameMode === "physical" ? "bg-emerald-500 text-emerald-950 ring-emerald-300" : "bg-white/5 text-slate-300 ring-white/10"}`} onclick={() => (gameMode = "physical")}>Physical cards</button>
+                        <button type="button" class={`rounded-xl px-3 py-3 font-bold ring-1 ${gameMode === "digital" ? "bg-emerald-500 text-emerald-950 ring-emerald-300" : "bg-white/5 text-slate-300 ring-white/10"}`} onclick={() => (gameMode = "digital")}>Digital cards</button>
+                    </div>
 
                     <div class="grid grid-cols-2 gap-3 mb-3">
                         <div>
@@ -803,10 +918,27 @@ function nextPhase() {
 
                         {#if !(isHost && gameState.phase === "showdown" && gameState.pot > 0)}
                             <div class="flex gap-2 justify-center mb-6 min-h-16">
-                                {#each gameState.communityCards as _card}
-                                    <div class="w-12 h-16 bg-white rounded flex items-center justify-center text-2xl text-slate-400 shadow-md ring-1 ring-black/5">?</div>
-                                {/each}
+                                {#if gameState.config.mode === "digital"}
+                                    {#each gameState.communityCards as card}
+                                        <div class={`w-12 h-16 bg-white rounded flex items-center justify-center text-xl font-black shadow-md ring-1 ring-black/5 ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
+                                    {/each}
+                                {:else}
+                                    {#each Array(gameState.phase === "flop" ? 3 : gameState.phase === "turn" ? 4 : gameState.phase === "river" || gameState.phase === "showdown" ? 5 : 0) as _}
+                                        <div class="w-12 h-16 bg-white rounded flex items-center justify-center text-2xl text-slate-400 shadow-md ring-1 ring-black/5">?</div>
+                                    {/each}
+                                {/if}
                             </div>
+
+                            {#if gameState.config.mode === "digital" && localHoleCards.length === 2}
+                                <div class="flex flex-col items-center mb-6">
+                                    <span class="text-xs uppercase tracking-[0.18em] text-white/75 font-bold mb-2">Your hand</span>
+                                    <div class="flex gap-2">
+                                        {#each localHoleCards as card}
+                                            <div class={`w-14 h-20 bg-white rounded-lg flex items-center justify-center text-2xl font-black shadow-lg ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
+                                        {/each}
+                                    </div>
+                                </div>
+                            {/if}
                         {/if}
 
                         {#if gameState.statusMessage && !(isHost && gameState.phase === "showdown" && gameState.pot > 0)}
@@ -884,6 +1016,7 @@ function nextPhase() {
 
                         <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-6">
                             {#each gameState.players as player}
+                                {@const revealed = gameState.revealedHands.find((hand) => hand.playerId === player.id)}
                                 <div class="bg-white rounded-2xl p-4 text-center relative shadow-lg ring-1 ring-black/5 transition-all"
                                      class:ring-4={player.isCurrentTurn}
                                      class:ring-yellow-300={player.isCurrentTurn}
@@ -901,6 +1034,10 @@ function nextPhase() {
                                     {/if}
                                     {#if player.hasFolded}
                                         <div class="text-xs text-red-600 font-bold mt-2 uppercase tracking-wider">Folded</div>
+                                    {/if}
+                                    {#if revealed}
+                                        <div class="mt-3 text-xs font-bold text-emerald-700">{revealed.handName}</div>
+                                        <div class="mt-1 font-black text-slate-800">{revealed.cards.map(formatCard).join("  ")}</div>
                                     {/if}
                                 </div>
                             {/each}
@@ -963,7 +1100,7 @@ function nextPhase() {
                                     </div>
                                 </div>
                             {:else if isHost && gameState.phase === "showdown" && gameState.pot > 0}
-                                <p class="text-center italic text-white/80 font-medium">Choose the showdown winner above.</p>
+                                <p class="text-center italic text-white/80 font-medium">{gameState.config.mode === "digital" ? "Calculating the showdown…" : "Choose the showdown winner above."}</p>
                             {:else if isHost && showHostAdvanceButton()}
                                 <div class="text-center">
                                     <button class="py-3 px-6 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md transition-colors" onclick={nextPhase}>

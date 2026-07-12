@@ -2,6 +2,16 @@
  * Poker Game Types
  */
 
+export type Card =
+    `${"2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "T" | "J" | "Q" | "K" | "A"}${"c" | "d" | "h" | "s"}`;
+export type GameMode = "physical" | "digital";
+
+export interface RevealedHand {
+    playerId: string;
+    cards: Card[];
+    handName: string;
+}
+
 export interface Payout {
     playerId: string;
     playerName: string;
@@ -27,6 +37,7 @@ export interface Player {
 export type GamePhase = "waiting" | "preflop" | "flop" | "turn" | "river" | "showdown";
 
 export interface GameConfig {
+    mode: GameMode;
     startingChips: number;
     smallBlind: number;
     bigBlind: number;
@@ -40,8 +51,8 @@ export interface GameState {
     currentBet: number;
     minRaise: number;
     round: number;
-    deck: number[];
-    communityCards: number[];
+    communityCards: Card[];
+    revealedHands: RevealedHand[];
     config: GameConfig;
     statusMessage: string;
     lastPayouts: Payout[];
@@ -54,6 +65,12 @@ export interface ActionMessage {
     playerId: string;
     action: PlayerAction;
     amount?: number;
+}
+
+export interface HoleCardsMessage {
+    type: "holeCards";
+    round: number;
+    cards: Card[];
 }
 
 export interface StateUpdateMessage {
@@ -77,6 +94,7 @@ export interface JoinResponseMessage {
 
 export type PeerMessage =
     | ActionMessage
+    | HoleCardsMessage
     | StateUpdateMessage
     | JoinRequestMessage
     | JoinResponseMessage;

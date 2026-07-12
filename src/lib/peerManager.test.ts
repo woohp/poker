@@ -8,6 +8,7 @@ interface MockProviderInstance {
     opts: { peerId?: string; rtcConfig?: RTCConfiguration };
     handlers: Map<string, Array<(payload: unknown) => void>>;
     awareness: MockAwareness;
+    peers: Map<string, never>;
     destroyed: boolean;
     ready: Promise<void>;
     on: (event: string, handler: (payload: unknown) => void) => void;
@@ -56,6 +57,7 @@ vi.mock("y-webtorrent", async () => {
         opts: { peerId?: string; rtcConfig?: RTCConfiguration };
         handlers = new Map<string, Array<(payload: unknown) => void>>();
         awareness = new MockAwareness();
+        peers = new Map<string, never>();
         destroyed = false;
         ready = Promise.resolve();
 
@@ -107,9 +109,10 @@ function sampleState(): GameState {
         currentBet: 0,
         minRaise: 10,
         round: 0,
-        deck: [],
         communityCards: [],
+        revealedHands: [],
         config: {
+            mode: "physical",
             startingChips: 1000,
             smallBlind: 5,
             bigBlind: 10,
