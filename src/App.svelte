@@ -1064,9 +1064,9 @@ function nextPhase() {
                                      class:opacity-55={player.hasFolded}>
                                     <div class="flex items-center justify-center gap-1.5 mb-2 flex-wrap">
                                         <span class="font-semibold text-sm truncate text-slate-900">{player.name}</span>
-                                        {#if player.isDealer}<span class="text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">D</span>{/if}
-                                        {#if player.isSmallBlind}<span class="text-xs bg-orange-500 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">SB</span>{/if}
-                                        {#if player.isBigBlind}<span class="text-xs bg-red-600 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">BB</span>{/if}
+                                        {#if player.isDealer}<span title="Dealer" class="text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">D</span>{/if}
+                                        {#if player.isSmallBlind}<span title="Small blind" class="text-xs bg-orange-500 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">SB</span>{/if}
+                                        {#if player.isBigBlind}<span title="Big blind" class="text-xs bg-red-600 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">BB</span>{/if}
                                     </div>
                                     <div class="text-2xl font-extrabold text-slate-900 tracking-tight">{player.chips}</div>
                                     <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500 mt-1">chips</div>
