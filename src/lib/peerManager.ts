@@ -122,6 +122,10 @@ export class PeerManager {
             },
         );
 
+        this.provider.on("peers", () => {
+            this.installPrivateMessageHandlers();
+        });
+
         this.provider.awareness.setLocalState({ peerId: this.localPeerId });
         this.provider.awareness.on("change", () => {
             this.installPrivateMessageHandlers();

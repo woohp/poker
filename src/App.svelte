@@ -305,7 +305,7 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
                 gameState.phase !== "waiting" &&
                 localHoleRound !== gameState.round
             ) {
-                requestHoleCards();
+                scheduleHoleCardRequests(gameState.round);
             }
             break;
         }
@@ -480,6 +480,14 @@ function restoreDealerState(round: number) {
         }
     } catch {
         localStorage.removeItem(DEALER_STORAGE_KEY);
+    }
+}
+
+function scheduleHoleCardRequests(round: number) {
+    for (const delay of [0, 300, 1000, 2500]) {
+        setTimeout(() => {
+            if (localHoleRound !== round && gameState?.round === round) requestHoleCards();
+        }, delay);
     }
 }
 
