@@ -5,7 +5,7 @@ import type { GameState, PeerMessage } from "./types";
 interface MockProviderInstance {
     roomName: string;
     doc: Y.Doc;
-    opts: { peerId?: string };
+    opts: { peerId?: string; rtcConfig?: RTCConfiguration };
     handlers: Map<string, Array<(payload: unknown) => void>>;
     destroyed: boolean;
     ready: Promise<void>;
@@ -22,12 +22,16 @@ vi.mock("y-webtorrent", async () => {
     class MockWebtorrentProvider {
         roomName: string;
         doc: Y.Doc;
-        opts: { peerId?: string };
+        opts: { peerId?: string; rtcConfig?: RTCConfiguration };
         handlers = new Map<string, Array<(payload: unknown) => void>>();
         destroyed = false;
         ready = Promise.resolve();
 
-        constructor(roomName: string, doc: Y.Doc, opts: { peerId?: string }) {
+        constructor(
+            roomName: string,
+            doc: Y.Doc,
+            opts: { peerId?: string; rtcConfig?: RTCConfiguration },
+        ) {
             this.roomName = roomName;
             this.doc = doc;
             this.opts = opts;
@@ -103,6 +107,10 @@ describe("PeerManager", () => {
         expect(peerManager.getRoomCode()).toBe("room-1");
         expect(provider.roomName).toBe("room-1");
         expect(provider.opts.peerId).toBe("host-1");
+        expect(provider.opts.rtcConfig?.iceServers).toEqual([
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun.cloudflare.com:3478" },
+        ]);
     });
 
     it("joins a room and publishes a join message", async () => {

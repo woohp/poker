@@ -14,6 +14,12 @@ interface MessageEnvelope {
 }
 
 const TRACKER_URLS = ["wss://tracker.openwebtorrent.com", "wss://tracker.webtorrent.dev"];
+const RTC_CONFIG: RTCConfiguration = {
+    iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun.cloudflare.com:3478" },
+    ],
+};
 
 export function generateRoomCode(length = 10): string {
     return randomId(length);
@@ -108,6 +114,7 @@ export class PeerManager {
             {
                 trackers: TRACKER_URLS,
                 peerId: this.localPeerId,
+                rtcConfig: RTC_CONFIG,
             },
         );
 
