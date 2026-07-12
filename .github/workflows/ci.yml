@@ -24,6 +24,8 @@ jobs:
               run: npm test
 
             - name: Browser tests
+              env:
+                  HOME: /root
               run: npm run test:e2e
 
             - name: Build
