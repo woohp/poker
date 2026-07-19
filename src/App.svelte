@@ -336,12 +336,16 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
 function handleConnectionChange(peerId: string, connected: boolean) {
     if (!gameState) return;
 
-    if (!isHost && connected && gameState.config.mode === "digital") {
-        requestHoleCards();
+    if (connected) {
+        if (isHost) {
+            peerManager?.broadcastState(gameState);
+        } else if (gameState.config.mode === "digital") {
+            requestHoleCards();
+        }
         return;
     }
 
-    if (connected || !isHost || gameState.phase !== "waiting") return;
+    if (!isHost || gameState.phase !== "waiting") return;
 
     removePlayer(gameState, peerId);
     peerManager?.broadcastState(gameState);

@@ -58,16 +58,28 @@ test("four players can act in turn", async ({ browser }) => {
         }
 
         await host!.getByText("Start Game", { exact: true }).click();
+        await expect(fourth!.getByText("Check", { exact: true })).toBeVisible();
+        await fourth!.getByText("Check", { exact: true }).click();
+
         await expect(host!.getByText("Call 10", { exact: true })).toBeVisible();
         await host!.getByText("Call 10", { exact: true }).click();
         await expect(second!.getByText("Call 10", { exact: true })).toBeVisible();
         await second!.getByText("Call 10", { exact: true }).click();
         await expect(third!.getByText("Call 5", { exact: true })).toBeVisible();
         await third!.getByText("Call 5", { exact: true }).click();
-        await expect(fourth!.getByText("Check", { exact: true })).toBeVisible();
-        await fourth!.getByText("Check", { exact: true }).click();
 
         await expect(host!.getByText("flop", { exact: true })).toBeVisible({ timeout: 5_000 });
+
+        await expect(host!.getByText("Check", { exact: true })).toBeVisible();
+        await host!.getByText("Check", { exact: true }).click();
+        await expect(third!.getByText("Check", { exact: true })).toBeVisible();
+        await third!.getByText("Check", { exact: true }).click();
+        await expect(fourth!.getByText("Check", { exact: true })).toBeVisible();
+        await fourth!.getByText("Check", { exact: true }).click();
+        await expect(second!.getByText("Check", { exact: true })).toBeVisible();
+        await second!.getByText("Check", { exact: true }).click();
+
+        await expect(host!.getByText("turn", { exact: true })).toBeVisible({ timeout: 5_000 });
     } finally {
         await Promise.all(contexts.map((context) => context.close()));
     }

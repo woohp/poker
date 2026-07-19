@@ -124,10 +124,7 @@ export class PeerManager {
         this.provider.on("direct-message", (peerId: unknown, payload: unknown) => {
             if (typeof peerId !== "string" || !(payload instanceof Uint8Array)) return;
             try {
-                const message = JSON.parse(new TextDecoder().decode(payload)) as Exclude<
-                    PeerMessage,
-                    { type: "state" }
-                >;
+                const message = JSON.parse(new TextDecoder().decode(payload)) as PeerMessage;
                 this.onMessage(message, peerId);
             } catch (error) {
                 console.error("Failed to parse private peer message:", error);
@@ -213,7 +210,7 @@ export class PeerManager {
         this.connectedPeerIds = nextPeerIds;
     }
 
-    sendPrivateToPeer(peerId: string, message: Exclude<PeerMessage, { type: "state" }>): boolean {
+    sendPrivateToPeer(peerId: string, message: PeerMessage): boolean {
         const payload = new TextEncoder().encode(JSON.stringify(message));
         return this.provider?.sendToPeer(peerId, payload) || false;
     }
@@ -244,8 +241,14 @@ export class PeerManager {
         ]);
     }
 
-    broadcastState(state: GameState, _excludePeerId?: string): void {
+    broadcastState(state: GameState, excludePeerId?: string): void {
         this.stateMap?.set("game", JSON.stringify(state));
+
+        for (const peerId of this.connectedPeerIds) {
+            if (peerId !== excludePeerId) {
+                this.sendPrivateToPeer(peerId, { type: "state", state });
+            }
+        }
     }
 
     getLocalPeerId(): string {

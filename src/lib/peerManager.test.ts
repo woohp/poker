@@ -9,6 +9,7 @@ interface MockProviderInstance {
     handlers: Map<string, Array<(payload: unknown) => void>>;
     awareness: MockAwareness;
     peers: Map<string, never>;
+    sentDirectMessages: Array<{ peerId: string; payload: Uint8Array }>;
     destroyed: boolean;
     ready: Promise<void>;
     on: (event: string, handler: (payload: unknown) => void) => void;
@@ -58,6 +59,7 @@ vi.mock("y-webtorrent", async () => {
         handlers = new Map<string, Array<(payload: unknown) => void>>();
         awareness = new MockAwareness();
         peers = new Map<string, never>();
+        sentDirectMessages: Array<{ peerId: string; payload: Uint8Array }> = [];
         destroyed = false;
         ready = Promise.resolve();
 
@@ -82,6 +84,11 @@ vi.mock("y-webtorrent", async () => {
             for (const handler of this.handlers.get(event) || []) {
                 handler(payload);
             }
+        }
+
+        sendToPeer(peerId: string, payload: Uint8Array) {
+            this.sentDirectMessages.push({ peerId, payload });
+            return true;
         }
 
         destroy() {
@@ -205,6 +212,31 @@ describe("PeerManager", () => {
         expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(state));
     });
 
+    it("broadcasts state through Yjs and directly to connected peers", async () => {
+        const peerManager = new PeerManager(
+            () => {},
+            () => {},
+        );
+        await peerManager.createHost("host-direct", "room-direct");
+
+        const provider = webtorrentMock.instances[0]!;
+        provider.awareness.setRemotePeerIds(["peer-a", "peer-b"]);
+        const state = sampleState();
+        state.pot = 75;
+
+        peerManager.broadcastState(state, "peer-b");
+
+        expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(state));
+        expect(provider.sentDirectMessages).toHaveLength(1);
+        expect(provider.sentDirectMessages[0]!.peerId).toBe("peer-a");
+        expect(
+            JSON.parse(new TextDecoder().decode(provider.sentDirectMessages[0]!.payload)),
+        ).toEqual({
+            type: "state",
+            state,
+        });
+    });
+
     it("delivers broadcast room messages to the host", async () => {
         const onMessage = vi.fn();
         const peerManager = new PeerManager(onMessage, () => {});
@@ -252,14 +284,14 @@ describe("PeerManager", () => {
             JSON.stringify({
                 id: "msg-earlier",
                 from: "guest-earlier",
-                to: null,
-                message: { type: "join", playerName: "Earlier", peerId: "guest-earlier" },
+                to: "host-ordered",
+                message: { type: "action", playerId: "guest-earlier", action: "check" },
             }),
         ]);
 
         expect(onMessage).toHaveBeenCalledTimes(2);
         expect(onMessage).toHaveBeenLastCalledWith(
-            { type: "join", playerName: "Earlier", peerId: "guest-earlier" },
+            { type: "action", playerId: "guest-earlier", action: "check" },
             "guest-earlier",
         );
     });
