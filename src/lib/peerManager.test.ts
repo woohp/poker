@@ -234,6 +234,36 @@ describe("PeerManager", () => {
         );
     });
 
+    it("delivers messages inserted before previously processed messages", async () => {
+        const onMessage = vi.fn();
+        const peerManager = new PeerManager(onMessage, () => {});
+        await peerManager.createHost("host-ordered", "room-ordered");
+
+        const messages = webtorrentMock.instances[0]!.doc.getArray<string>("messages");
+        messages.push([
+            JSON.stringify({
+                id: "msg-later",
+                from: "guest-later",
+                to: null,
+                message: { type: "join", playerName: "Later", peerId: "guest-later" },
+            }),
+        ]);
+        messages.insert(0, [
+            JSON.stringify({
+                id: "msg-earlier",
+                from: "guest-earlier",
+                to: null,
+                message: { type: "join", playerName: "Earlier", peerId: "guest-earlier" },
+            }),
+        ]);
+
+        expect(onMessage).toHaveBeenCalledTimes(2);
+        expect(onMessage).toHaveBeenLastCalledWith(
+            { type: "join", playerName: "Earlier", peerId: "guest-earlier" },
+            "guest-earlier",
+        );
+    });
+
     it("delivers targeted messages to the matching client only", async () => {
         const onMessage = vi.fn();
         const peerManager = new PeerManager(onMessage, () => {});

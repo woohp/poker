@@ -42,7 +42,7 @@ export class PeerManager {
     private localPeerId = "";
     private roomCode = "";
     private isHost = false;
-    private knownMessageCount = 0;
+    private processedMessageIds: Set<string> = new Set();
     private connectedPeerIds: Set<string> = new Set();
 
     constructor(onMessage: MessageHandler, onConnectionChange: ConnectionChangeHandler) {
@@ -86,7 +86,7 @@ export class PeerManager {
         this.doc = new Y.Doc();
         this.messages = this.doc.getArray<string>("messages");
         this.stateMap = this.doc.getMap<string>("state");
-        this.knownMessageCount = this.messages.length;
+        this.processedMessageIds.clear();
         this.connectedPeerIds.clear();
 
         this.messages.observe(() => {
@@ -155,12 +155,14 @@ export class PeerManager {
             return;
         }
 
-        const nextMessages = this.messages.toArray().slice(this.knownMessageCount);
-        this.knownMessageCount += nextMessages.length;
-
-        for (const rawEnvelope of nextMessages) {
+        for (const rawEnvelope of this.messages.toArray()) {
             try {
                 const envelope = JSON.parse(rawEnvelope) as MessageEnvelope;
+                if (this.processedMessageIds.has(envelope.id)) {
+                    continue;
+                }
+                this.processedMessageIds.add(envelope.id);
+
                 if (envelope.from === this.localPeerId) {
                     continue;
                 }
@@ -270,7 +272,7 @@ export class PeerManager {
         this.doc = null;
         this.messages = null;
         this.stateMap = null;
-        this.knownMessageCount = 0;
+        this.processedMessageIds.clear();
         this.connectedPeerIds.clear();
     }
 }
