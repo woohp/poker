@@ -45,6 +45,10 @@ npm run test:stress
 
 The host is authoritative. Clients send versioned commands to the host and render replicated snapshots; they do not apply poker actions locally.
 
+### Trust Model
+
+This is currently a casual, trusted-room app. Anyone with the room code is treated as a trusted participant; host authority provides consistent game coordination, not cryptographic security or cheat resistance. Do not add signatures, public-key identities, or adversarial transport hardening unless public rooms, matchmaking, stakes, or untrusted participants become product goals. Still preserve basic sender consistency checks and normal input validation where they prevent accidental corruption.
+
 Canonical construction and restoration:
 
 ```typescript
@@ -57,7 +61,7 @@ const engine = new GameEngine(game, {
 ```
 
 - `gameEngine.ts` is generic infrastructure. It owns the authority epoch, command revision, deduplication, and authoritative event history. It appends events only for accepted commands and knows nothing about poker, networking, persistence, or Svelte. Do not add arbitrary state replacement or a `commit()` escape hatch; state changes must originate as game commands and events.
-- `pokerGame.ts` is the stateful poker implementation. `PokerGame(config, events?)` rebuilds its private derived state by replaying events but does not retain history. `execute()` delegates command decisions to pure `decidePokerCommand()` logic, accepted events are applied through `evolvePokerState()`, and `snapshot()` returns a detached UI/network view.
+- `pokerGame.ts` is the stateful poker implementation. `PokerGame(config, events?)` rebuilds its private derived state by replaying events but does not retain history. `execute()` delegates command decisions to pure `decidePokerCommand()` logic, accepted events are applied through `evolvePokerState()`, and `snapshot()` returns a detached UI/network view. `PokerEvent` currently records accepted commands and their context rather than granular domain facts; treat the persisted format as version-sensitive until versioned domain events and migrations are introduced.
 - The host's event history is the durable source of truth. `persistence.ts` stores host configuration, epoch, revision, and history. Clients do not persist game state; after refresh they reconnect and receive a current snapshot.
 - `pokerProtocol.ts` translates poker network messages to/from generic engine commands and results.
 - `peerManager.ts` is transport only: Yjs/WebRTC discovery, commands, acknowledgements, awareness, and replicated snapshots. Transport must not apply rules or mutate revisions.
