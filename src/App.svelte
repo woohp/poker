@@ -260,19 +260,24 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             break;
         }
         case "action": {
-            applyHostAction(message.playerId, message.action, message.amount);
+            if (
+                message.playerId !== fromPeerId ||
+                !applyHostAction(message.playerId, message.action, message.amount)
+            ) {
+                peerManager?.sendPrivateToPeer(fromPeerId, { type: "state", state: gameState });
+            }
             break;
         }
     }
 }
 
-function applyHostAction(playerId: string, action: "fold" | "check" | "call" | "raise" | "allin", amount?: number) {
-    if (!gameState) {
-        return;
-    }
-
-    if (!processAction(gameState, playerId, action, amount)) {
-        return;
+function applyHostAction(
+    playerId: string,
+    action: "fold" | "check" | "call" | "raise" | "allin",
+    amount?: number,
+): boolean {
+    if (!gameState || !processAction(gameState, playerId, action, amount)) {
+        return false;
     }
 
     peerManager?.broadcastState(gameState);
@@ -286,6 +291,8 @@ function applyHostAction(playerId: string, action: "fold" | "check" | "call" | "
             }
         }, PHASE_ADVANCE_DELAY_MS);
     }
+
+    return true;
 }
 
 function handleClientMessage(message: PeerMessage, _fromPeerId: string) {

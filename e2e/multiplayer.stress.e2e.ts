@@ -158,17 +158,25 @@ async function findCurrentPlayerPage(pages: Page[]): Promise<Page | null> {
         await expect
             .poll(
                 async () => {
-                    current = undefined;
-                    for (const page of pages) {
-                        if (await page.locator('button[data-action="fold"]').isVisible()) {
-                            current = page;
-                            return "current";
-                        }
-                    }
                     const state = await readStateWithTimeout(pages[0]!, 0);
-                    return state.phase === "showdown" && state.pot === 0 ? "showdown" : "waiting";
+                    if (state.phase === "showdown" && state.pot === 0) {
+                        current = undefined;
+                        return "showdown";
+                    }
+
+                    const currentPlayerIndex = state.players.findIndex(
+                        (player) => player.isCurrentTurn,
+                    );
+                    current = pages[currentPlayerIndex];
+                    if (
+                        current &&
+                        (await current.locator('button[data-action="fold"]').isVisible())
+                    ) {
+                        return "current";
+                    }
+                    return "waiting";
                 },
-                { message: "No player received action buttons", timeout: 5_000 },
+                { message: "The current player did not receive action buttons", timeout: 5_000 },
             )
             .not.toBe("waiting");
     } catch (error) {

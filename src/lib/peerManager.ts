@@ -241,14 +241,8 @@ export class PeerManager {
         ]);
     }
 
-    broadcastState(state: GameState, excludePeerId?: string): void {
+    broadcastState(state: GameState, _excludePeerId?: string): void {
         this.stateMap?.set("game", JSON.stringify(state));
-
-        for (const peerId of this.connectedPeerIds) {
-            if (peerId !== excludePeerId) {
-                this.sendPrivateToPeer(peerId, { type: "state", state });
-            }
-        }
     }
 
     getLocalPeerId(): string {

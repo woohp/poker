@@ -6,14 +6,14 @@ interface MockProviderInstance {
     roomName: string;
     doc: Y.Doc;
     opts: { peerId?: string; rtcConfig?: RTCConfiguration };
-    handlers: Map<string, Array<(payload: unknown) => void>>;
+    handlers: Map<string, Array<(...payload: unknown[]) => void>>;
     awareness: MockAwareness;
     peers: Map<string, never>;
     sentDirectMessages: Array<{ peerId: string; payload: Uint8Array }>;
     destroyed: boolean;
     ready: Promise<void>;
-    on: (event: string, handler: (payload: unknown) => void) => void;
-    emit: (event: string, payload: unknown) => void;
+    on: (event: string, handler: (...payload: unknown[]) => void) => void;
+    emit: (event: string, ...payload: unknown[]) => void;
     destroy: () => void;
 }
 
@@ -56,7 +56,7 @@ vi.mock("y-webtorrent", async () => {
         roomName: string;
         doc: Y.Doc;
         opts: { peerId?: string; rtcConfig?: RTCConfiguration };
-        handlers = new Map<string, Array<(payload: unknown) => void>>();
+        handlers = new Map<string, Array<(...payload: unknown[]) => void>>();
         awareness = new MockAwareness();
         peers = new Map<string, never>();
         sentDirectMessages: Array<{ peerId: string; payload: Uint8Array }> = [];
@@ -74,15 +74,15 @@ vi.mock("y-webtorrent", async () => {
             webtorrentMock.instances.push(this as MockProviderInstance);
         }
 
-        on(event: string, handler: (payload: unknown) => void) {
+        on(event: string, handler: (...payload: unknown[]) => void) {
             const handlers = this.handlers.get(event) || [];
             handlers.push(handler);
             this.handlers.set(event, handlers);
         }
 
-        emit(event: string, payload: unknown) {
+        emit(event: string, ...payload: unknown[]) {
             for (const handler of this.handlers.get(event) || []) {
-                handler(payload);
+                handler(...payload);
             }
         }
 
@@ -212,7 +212,7 @@ describe("PeerManager", () => {
         expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(state));
     });
 
-    it("broadcasts state through Yjs and directly to connected peers", async () => {
+    it("broadcasts state through Yjs without a second unordered direct delivery", async () => {
         const peerManager = new PeerManager(
             () => {},
             () => {},
@@ -227,14 +227,30 @@ describe("PeerManager", () => {
         peerManager.broadcastState(state, "peer-b");
 
         expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(state));
-        expect(provider.sentDirectMessages).toHaveLength(1);
-        expect(provider.sentDirectMessages[0]!.peerId).toBe("peer-a");
-        expect(
-            JSON.parse(new TextDecoder().decode(provider.sentDirectMessages[0]!.payload)),
-        ).toEqual({
-            type: "state",
-            state,
-        });
+        expect(provider.sentDirectMessages).toHaveLength(0);
+    });
+
+    it("keeps the newest Yjs state", async () => {
+        const receivedStates: GameState[] = [];
+        const peerManager = new PeerManager(
+            (message) => {
+                if (message.type === "state") receivedStates.push(message.state);
+            },
+            () => {},
+        );
+        await peerManager.joinGame("room-state-order", "Guest", "guest-state-order");
+
+        const provider = webtorrentMock.instances[0]!;
+        const olderState = sampleState();
+        olderState.pot = 10;
+        const newerState = sampleState();
+        newerState.pot = 20;
+
+        provider.doc.getMap<string>("state").set("game", JSON.stringify(olderState));
+        provider.doc.getMap<string>("state").set("game", JSON.stringify(newerState));
+
+        expect(receivedStates.at(-1)).toEqual(newerState);
+        expect(provider.sentDirectMessages).toHaveLength(0);
     });
 
     it("delivers broadcast room messages to the host", async () => {
