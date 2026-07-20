@@ -45,8 +45,19 @@ npm run test:stress
 
 The host is authoritative. Clients send versioned commands to the host and render replicated snapshots; they do not apply poker actions locally.
 
-- `gameEngine.ts` is generic infrastructure. It owns the authority epoch, command revision, deduplication, and authoritative event history. It knows nothing about poker, networking, persistence, or Svelte.
-- `pokerGame.ts` is the stateful poker implementation. `PokerGame(config, events?)` rebuilds its private derived state by replaying events. Commands are decided with pure poker logic, accepted events evolve the state, and `snapshot()` returns a detached UI/network view. `PokerGame` does not retain history.
+Canonical construction and restoration:
+
+```typescript
+const game = new PokerGame(config, events);
+const engine = new GameEngine(game, {
+    epoch,
+    revision,
+    history: events,
+});
+```
+
+- `gameEngine.ts` is generic infrastructure. It owns the authority epoch, command revision, deduplication, and authoritative event history. It appends events only for accepted commands and knows nothing about poker, networking, persistence, or Svelte. Do not add arbitrary state replacement or a `commit()` escape hatch; state changes must originate as game commands and events.
+- `pokerGame.ts` is the stateful poker implementation. `PokerGame(config, events?)` rebuilds its private derived state by replaying events but does not retain history. `execute()` delegates command decisions to pure `decidePokerCommand()` logic, accepted events are applied through `evolvePokerState()`, and `snapshot()` returns a detached UI/network view.
 - The host's event history is the durable source of truth. `persistence.ts` stores host configuration, epoch, revision, and history. Clients do not persist game state; after refresh they reconnect and receive a current snapshot.
 - `pokerProtocol.ts` translates poker network messages to/from generic engine commands and results.
 - `peerManager.ts` is transport only: Yjs/WebRTC discovery, commands, acknowledgements, awareness, and replicated snapshots. Transport must not apply rules or mutate revisions.
