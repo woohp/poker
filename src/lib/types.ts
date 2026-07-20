@@ -27,6 +27,7 @@ export interface Player {
     isActive: boolean;
     hasFolded: boolean;
     hasActed: boolean;
+    actedAtBet: number;
     handContribution: number;
     currentBet: number;
     isDealer: boolean;

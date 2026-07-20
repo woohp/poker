@@ -23,6 +23,7 @@ import {
     loadSession,
     saveGame,
     saveSession,
+    SAVED_GAME_VERSION,
     type SavedDealerState,
     type SavedGame,
 } from "./lib/persistence";
@@ -76,6 +77,7 @@ let localHoleCards: Card[] = $state([]);
 let localHoleRound = $state(0);
 let hostDeck: Card[] = [];
 let hostHoleCards = new Map<string, Card[]>();
+let persistenceFailed = false;
 const PHASE_ADVANCE_DELAY_MS = Number(import.meta.env.VITE_PHASE_ADVANCE_DELAY_MS || 1000);
 
 onMount(() => {
@@ -97,7 +99,13 @@ onMount(() => {
     window.addEventListener("popstate", syncRoute);
     window.addEventListener("pagehide", announceDeparture);
 
-    const saved = loadGame();
+    let saved: SavedGame | null = null;
+    try {
+        saved = loadGame();
+    } catch {
+        clearGame();
+        errorMessage = "The saved game is from an unsupported version and cannot be restored.";
+    }
     const session = loadSession();
     const savedPeerId = loadStablePeerId();
 
@@ -210,19 +218,28 @@ function setGameSnapshot(snapshot: GameSnapshot) {
     }
 }
 
-function publishCurrentState() {
-    if (!gameEngine) return;
+function publishCurrentState(): boolean {
+    if (!gameEngine || persistenceFailed) return false;
     const snapshot = gameEngine.snapshot();
+    try {
+        persistHistory();
+    } catch (error) {
+        console.error("Failed to persist authoritative game state:", error);
+        persistenceFailed = true;
+        errorMessage =
+            "The game could not be saved. Play is paused; reload the host to recover the last saved state.";
+        return false;
+    }
     setGameSnapshot(snapshot);
     peerManager?.broadcastState(snapshot);
-    persistHistory();
+    return true;
 }
 
 function dispatchTrustedCommand(
     command: PokerCommand,
     publish = true,
 ): PokerEngineResult | null {
-    if (!gameEngine || !localPlayerId) return null;
+    if (!gameEngine || !localPlayerId || persistenceFailed) return null;
     const snapshot = gameEngine.snapshot();
     const result = gameEngine.dispatch(
         {
@@ -232,16 +249,16 @@ function dispatchTrustedCommand(
         },
         { actorId: localPlayerId, trusted: true },
     );
-    if (result.accepted) {
-        setGameSnapshot(result.snapshot);
-        if (publish) publishCurrentState();
-    }
+    if (!result.accepted) return result;
+    setGameSnapshot(result.snapshot);
+    if (publish && !publishCurrentState()) return null;
     return result;
 }
 
 function persistHistory() {
     if (!isHost || !gameEngine || !pokerGameConfig) return;
     saveGame({
+        version: SAVED_GAME_VERSION,
         config: pokerGameConfig,
         history: gameEngine.history(),
         dealer: getSavedDealerState(),
@@ -257,6 +274,7 @@ async function restoreSession(
 ) {
     disconnectPeerManager();
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
+    persistenceFailed = false;
 
     try {
         if (savedIsHost) {
@@ -366,12 +384,16 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             break;
         }
         case "action": {
-            if (!gameEngine) break;
+            if (!gameEngine || persistenceFailed) break;
             const processed = gameEngine.dispatch(toEngineCommand(message), {
                 actorId: fromPeerId,
             });
-            if (processed.accepted && !processed.duplicate) {
-                commitProcessedCommand(processed);
+            if (
+                processed.accepted &&
+                !processed.duplicate &&
+                !commitProcessedCommand(processed)
+            ) {
+                break;
             }
             peerManager?.sendPrivateToPeer(fromPeerId, toCommandResultMessage(processed));
             break;
@@ -384,7 +406,7 @@ function applyHostAction(
     action: PlayerAction,
     amount?: number,
 ): boolean {
-    if (!gameEngine) return false;
+    if (!gameEngine || persistenceFailed) return false;
 
     const snapshot = gameEngine.snapshot();
     const processed = gameEngine.dispatch(
@@ -403,14 +425,14 @@ function applyHostAction(
     );
     if (!processed.accepted) return false;
 
-    commitProcessedCommand(processed);
-    return true;
+    return commitProcessedCommand(processed);
 }
 
-function commitProcessedCommand(processed: PokerEngineResult) {
+function commitProcessedCommand(processed: PokerEngineResult): boolean {
     setGameSnapshot(processed.snapshot);
-    publishCurrentState();
+    if (!publishCurrentState()) return false;
     scheduleAutomaticPhaseAdvance();
+    return true;
 }
 
 function scheduleAutomaticPhaseAdvance() {
@@ -549,6 +571,7 @@ async function createGame() {
 
     errorMessage = "";
     isLoading = true;
+    persistenceFailed = false;
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
     isHost = true;
 
@@ -650,7 +673,7 @@ function startHand() {
         }
     }
 
-    publishCurrentState();
+    if (!publishCurrentState()) return;
     for (const playerId of hostHoleCards.keys()) sendHoleCards(playerId);
     scheduleAutomaticPhaseAdvance();
 }
@@ -777,7 +800,7 @@ function advanceHostPhase() {
     );
     if (!result?.accepted) return;
     hostDeck = nextDeck;
-    publishCurrentState();
+    if (!publishCurrentState()) return;
     scheduleAutomaticPhaseAdvance();
 }
 
@@ -1233,6 +1256,9 @@ function nextPhase() {
 
                 {:else}
                     <div class="bg-gradient-to-b from-emerald-500 to-green-600 rounded-3xl p-6 min-h-[60vh] shadow-2xl ring-1 ring-white/15">
+                        {#if errorMessage}
+                            <p class="mb-4 text-red-100 rounded-2xl bg-red-950/60 border border-red-300/30 px-4 py-3">{errorMessage}</p>
+                        {/if}
                         {#if !(isHost && gameState.phase === "showdown" && gameState.pot > 0)}
                             <div class="flex justify-between items-center mb-6">
                                 <div class="bg-black/15 backdrop-blur-sm rounded-2xl px-4 py-3 shadow-lg">

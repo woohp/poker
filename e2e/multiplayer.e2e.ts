@@ -1,8 +1,27 @@
 import { chromium, expect, firefox, test, type Browser } from "@playwright/test";
 
-async function joinGame(browser: Browser, digital = false) {
+async function joinGame(browser: Browser, digital = false, installStorageFailureHook = false) {
     const hostContext = await browser.newContext();
     const guestContext = await browser.newContext();
+    if (installStorageFailureHook) {
+        await hostContext.addInitScript(() => {
+            const originalSetItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")!
+                .value as (this: Storage, key: string, value: string) => void;
+            Object.defineProperty(Storage.prototype, "setItem", {
+                configurable: true,
+                value(this: Storage, key: string, value: string) {
+                    if (
+                        key === "poker_game_state" &&
+                        (window as Window & { __failPokerPersistence?: boolean })
+                            .__failPokerPersistence
+                    ) {
+                        throw new Error("simulated storage failure");
+                    }
+                    Reflect.apply(originalSetItem, this, [key, value]);
+                },
+            });
+        });
+    }
     const host = await hostContext.newPage();
     const guest = await guestContext.newPage();
 
@@ -119,6 +138,42 @@ test("the host can refresh mid-hand without replaying old actions", async ({ bro
 
         await expect(host.getByText("flop", { exact: true })).toBeVisible({ timeout: 10_000 });
         await expect(guest.getByText("flop", { exact: true })).toBeVisible({ timeout: 10_000 });
+    } finally {
+        await Promise.all([hostContext.close(), guestContext.close()]);
+    }
+});
+
+test("an unsaved host revision is not published", async ({ browser }) => {
+    const { hostContext, guestContext, host, guest } = await joinGame(browser, false, true);
+
+    try {
+        await host.getByText("Start Game", { exact: true }).click();
+        const guestAction = guest.locator(
+            'button[data-action="check"], button[data-action="call"]',
+        );
+        await expect(guestAction).toBeVisible();
+        const guestStateBefore = await guest.evaluate(() =>
+            JSON.stringify((window as Window & { __pokerGameState?: unknown }).__pokerGameState),
+        );
+
+        const storageFailureInstalled = await host.evaluate(() => {
+            (window as Window & { __failPokerPersistence?: boolean }).__failPokerPersistence = true;
+            try {
+                localStorage.setItem("poker_game_state", "test");
+                return false;
+            } catch {
+                return true;
+            }
+        });
+        expect(storageFailureInstalled).toBe(true);
+        await guestAction.click();
+
+        await expect(host.getByText(/The game could not be saved/)).toBeVisible();
+        await host.waitForTimeout(500);
+        const guestStateAfter = await guest.evaluate(() =>
+            JSON.stringify((window as Window & { __pokerGameState?: unknown }).__pokerGameState),
+        );
+        expect(guestStateAfter).toBe(guestStateBefore);
     } finally {
         await Promise.all([hostContext.close(), guestContext.close()]);
     }

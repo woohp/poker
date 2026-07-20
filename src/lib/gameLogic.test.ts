@@ -20,8 +20,10 @@ import {
     clearSession,
     loadGame as loadGameState,
     loadSession,
+    SAVED_GAME_VERSION,
     saveGame as saveGameState,
     saveSession,
+    type SavedGame,
 } from "./persistence";
 import type { GameConfig, GameState } from "./types";
 
@@ -101,7 +103,8 @@ describe("session and game persistence", () => {
     });
 
     it("saves and loads game history", () => {
-        const savedGame = {
+        const savedGame: SavedGame = {
+            version: SAVED_GAME_VERSION,
             config: {
                 game: config,
                 hostPlayerName: "Host",
@@ -130,6 +133,12 @@ describe("session and game persistence", () => {
         clearGameState();
         expect(loadGameState()).toBeNull();
     });
+
+    it("rejects an unsupported persistence envelope", () => {
+        localStorage.setItem("poker_game_state", JSON.stringify({ history: [] }));
+
+        expect(() => loadGameState()).toThrow("Unsupported saved game format");
+    });
 });
 
 describe("player management", () => {
@@ -147,6 +156,7 @@ describe("player management", () => {
             isHost: true,
             hasFolded: false,
             hasActed: false,
+            actedAtBet: 0,
             isCurrentTurn: false,
         });
     });
@@ -306,6 +316,35 @@ describe("betting actions", () => {
         expect(getValidActions(state, previousCaller)).toEqual(["fold", "call"]);
         expect(processAction(state, "p2", "call")).toBe(true);
         expect(isBettingRoundComplete(state)).toBe(true);
+    });
+
+    it("reopens raising after cumulative short all-ins reach a full raise", () => {
+        const state = createState(4);
+        state.phase = "preflop";
+        state.currentBet = 100;
+        state.minRaise = 100;
+        const host = state.players.find((player) => player.id === "host")!;
+        host.currentBet = 100;
+        host.hasActed = true;
+        host.actedAtBet = 100;
+        setCurrentPlayer(state.players, "p2");
+
+        const firstAllIn = state.players.find((player) => player.id === "p2")!;
+        firstAllIn.chips = 150;
+        expect(processAction(state, "p2", "allin")).toBe(true);
+        expect(host.hasActed).toBe(true);
+
+        expect(processAction(state, "p3", "call")).toBe(true);
+        const interveningCaller = state.players.find((player) => player.id === "p3")!;
+        expect(interveningCaller.actedAtBet).toBe(150);
+
+        const secondAllIn = state.players.find((player) => player.id === "p4")!;
+        secondAllIn.chips = 200;
+        expect(processAction(state, "p4", "allin")).toBe(true);
+
+        expect(host.hasActed).toBe(false);
+        expect(getValidActions(state, host)).toContain("raise");
+        expect(interveningCaller.hasActed).toBe(true);
     });
 
     it("rejects a raise that the player cannot fund", () => {

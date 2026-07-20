@@ -62,6 +62,22 @@ describe("PokerGame", () => {
         ).toThrow("Invalid poker game configuration");
     });
 
+    it("allows blinds and antes to put starting stacks all-in", () => {
+        expect(
+            () =>
+                new PokerGame({
+                    ...config,
+                    game: {
+                        ...config.game,
+                        startingChips: 10,
+                        smallBlind: 5,
+                        bigBlind: 10,
+                        ante: 10,
+                    },
+                }),
+        ).not.toThrow();
+    });
+
     it("owns its state while using pure poker decisions", () => {
         const game = createStartedGame();
         const before = game.snapshot();

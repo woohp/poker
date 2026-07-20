@@ -5,6 +5,7 @@ export type GameExecutionResult<Event, Reason extends string> =
 export interface Game<State, Command, Event, Context, Reason extends string> {
     snapshot(): State;
     decide(command: Command, context: Context): GameExecutionResult<Event, Reason>;
+    /** Apply the complete batch atomically: on failure, leave game state unchanged and throw. */
     apply(events: readonly Event[]): void;
 }
 
@@ -48,6 +49,7 @@ export class GameEngine<State, Command, Event, Context, Reason extends string> {
     private readonly entries: GameHistoryEntry<Event>[];
     private readonly results = new Map<string, CachedCommandResult<Event, Reason>>();
 
+    /** The supplied game must be freshly constructed; this constructor replays all history into it. */
     constructor(
         private readonly game: Game<State, Command, Event, Context, Reason>,
         options: GameEngineOptions<Event> = {},

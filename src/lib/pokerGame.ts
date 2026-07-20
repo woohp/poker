@@ -275,8 +275,7 @@ function validatePokerGameConfig(config: PokerGameConfig): void {
         startingChips <= 0 ||
         smallBlind <= 0 ||
         bigBlind <= smallBlind ||
-        ante < 0 ||
-        ante + bigBlind > startingChips
+        ante < 0
     ) {
         throw new Error("Invalid poker game configuration");
     }

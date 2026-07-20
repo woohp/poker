@@ -1,8 +1,10 @@
 import type { GameHistoryEntry } from "./gameEngine";
 import type { PokerEvent, PokerGameConfig } from "./pokerGame";
 import type { Card } from "./types";
+
 const GAME_STORAGE_KEY = "poker_game_state";
 const SESSION_STORAGE_KEY = "poker_session";
+export const SAVED_GAME_VERSION = 1;
 
 export interface SavedDealerState {
     round: number;
@@ -11,6 +13,7 @@ export interface SavedDealerState {
 }
 
 export interface SavedGame {
+    version: typeof SAVED_GAME_VERSION;
     config: PokerGameConfig;
     history: readonly GameHistoryEntry<PokerEvent>[];
     dealer?: SavedDealerState;
@@ -45,23 +48,36 @@ export function clearSession(): void {
 }
 
 export function saveGame(savedGame: SavedGame): void {
-    try {
-        localStorage.setItem(GAME_STORAGE_KEY, JSON.stringify(savedGame));
-    } catch (error) {
-        console.error("Failed to save game state:", error);
-    }
+    localStorage.setItem(GAME_STORAGE_KEY, JSON.stringify(savedGame));
 }
 
 export function loadGame(): SavedGame | null {
-    try {
-        const saved = localStorage.getItem(GAME_STORAGE_KEY);
-        return saved ? (JSON.parse(saved) as SavedGame) : null;
-    } catch (error) {
-        console.error("Failed to load game state:", error);
-        return null;
+    const saved = localStorage.getItem(GAME_STORAGE_KEY);
+    if (!saved) return null;
+
+    const parsed = JSON.parse(saved) as unknown;
+    if (!isSavedGame(parsed)) {
+        throw new Error("Unsupported saved game format");
     }
+    return parsed;
 }
 
 export function clearGame(): void {
     localStorage.removeItem(GAME_STORAGE_KEY);
+}
+
+function isSavedGame(value: unknown): value is SavedGame {
+    if (!isRecord(value) || value["version"] !== SAVED_GAME_VERSION) return false;
+    if (!isRecord(value["config"]) || !Array.isArray(value["history"])) return false;
+
+    return value["history"].every(
+        (entry) =>
+            isRecord(entry) &&
+            typeof entry["commandId"] === "string" &&
+            Array.isArray(entry["events"]),
+    );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
 }

@@ -55,6 +55,7 @@ export function resetBets(players: Player[]): void {
     for (const player of players) {
         player.currentBet = 0;
         player.hasActed = false;
+        player.actedAtBet = 0;
     }
 }
 
@@ -166,6 +167,7 @@ export function processAction(
         return false;
     }
 
+    let increasedBet = false;
     let reopensBetting = false;
 
     switch (action) {
@@ -197,6 +199,7 @@ export function processAction(
             player.hasActed = true;
             state.minRaise = player.currentBet - previousBet;
             state.currentBet = player.currentBet;
+            increasedBet = true;
             reopensBetting = true;
             break;
         }
@@ -207,6 +210,7 @@ export function processAction(
             if (player.currentBet > previousBet) {
                 const raiseSize = player.currentBet - previousBet;
                 state.currentBet = player.currentBet;
+                increasedBet = true;
                 if (raiseSize >= state.minRaise) {
                     state.minRaise = raiseSize;
                     reopensBetting = true;
@@ -216,18 +220,26 @@ export function processAction(
         }
     }
 
-    if (reopensBetting) {
+    if (increasedBet) {
         for (const otherPlayer of state.players) {
             if (
-                otherPlayer.id !== player.id &&
-                otherPlayer.isActive &&
-                !otherPlayer.hasFolded &&
-                otherPlayer.chips > 0
+                otherPlayer.id === player.id ||
+                !otherPlayer.isActive ||
+                otherPlayer.hasFolded ||
+                otherPlayer.chips <= 0
+            ) {
+                continue;
+            }
+            if (
+                reopensBetting ||
+                (otherPlayer.hasActed &&
+                    state.currentBet - otherPlayer.actedAtBet >= state.minRaise)
             ) {
                 otherPlayer.hasActed = false;
             }
         }
     }
+    player.actedAtBet = state.currentBet;
 
     if (getActivePlayerCount(state.players) <= 1) {
         const winner = state.players.find((entry) => entry.isActive && !entry.hasFolded);
@@ -261,6 +273,7 @@ export function startNewHand(state: GameState): void {
         player.isActive = player.chips > 0;
         player.hasFolded = false;
         player.hasActed = false;
+        player.actedAtBet = 0;
         player.handContribution = 0;
         player.currentBet = 0;
         player.isCurrentTurn = false;
@@ -476,6 +489,7 @@ function createPlayer(id: string, name: string, chips: number, isHost: boolean):
         isActive: true,
         hasFolded: false,
         hasActed: false,
+        actedAtBet: 0,
         handContribution: 0,
         currentBet: 0,
         isDealer: isHost,
