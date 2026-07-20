@@ -20,9 +20,18 @@ npm run lint
 
 # Formatting (Vite+ / oxfmt)
 npm run format
+
+# Unit tests
+npm test
+
+# Playwright multiplayer tests
+npm run test:e2e
+
+# Deterministic 100-hand multiplayer stress test
+npm run test:stress
 ```
 
-**Note:** Tests are run with Vite+ test (`vite-plus/test`).
+**Note:** Unit tests are run with Vite+ test (`vite-plus/test`).
 
 ## Tech Stack
 
@@ -31,6 +40,27 @@ npm run format
 - **Language:** TypeScript (strict)
 - **Package Manager:** npm
 - **Linting/Formatting:** Vite+ with oxlint / oxfmt
+
+## High-Level Architecture
+
+The host is authoritative. Clients send versioned commands to the host and render replicated snapshots; they do not apply poker actions locally.
+
+- `gameEngine.ts` is generic infrastructure. It owns the authority epoch, command revision, deduplication, and authoritative event history. It knows nothing about poker, networking, persistence, or Svelte.
+- `pokerGame.ts` is the stateful poker implementation. `PokerGame(config, events?)` rebuilds its private derived state by replaying events. Commands are decided with pure poker logic, accepted events evolve the state, and `snapshot()` returns a detached UI/network view. `PokerGame` does not retain history.
+- The host's event history is the durable source of truth. `persistence.ts` stores host configuration, epoch, revision, and history. Clients do not persist game state; after refresh they reconnect and receive a current snapshot.
+- `pokerProtocol.ts` translates poker network messages to/from generic engine commands and results.
+- `peerManager.ts` is transport only: Yjs/WebRTC discovery, commands, acknowledgements, awareness, and replicated snapshots. Transport must not apply rules or mutate revisions.
+- `gameLogic.ts` contains poker rule primitives and has no networking or persistence side effects.
+- `App.svelte` composes UI, `GameEngine`, `PokerGame`, transport, and persistence. Shared state changes must go through game commands; do not mutate replicated state directly.
+
+Typical host flow:
+
+```text
+client command -> PeerManager -> GameEngine -> PokerGame decision/events
+               -> append history -> publish snapshot + command result
+```
+
+Keep these boundaries when adding games: implement another `Game` class and protocol adapter rather than adding game-specific behavior to `GameEngine`.
 
 ## Code Style Guidelines
 
@@ -116,12 +146,16 @@ let doubled = $derived(count * 2);
 │   ├── App.svelte
 │   ├── app.css
 │   └── lib/
-│       ├── gameLogic.ts
-│       ├── gameLogic.test.ts
-│       ├── peerManager.ts
-│       ├── peerManager.test.ts
-│       ├── poker.ts
-│       └── types.ts
+│       ├── gameEngine.ts      # Generic event-history/command engine
+│       ├── pokerGame.ts       # Stateful poker game and pure decisions
+│       ├── gameLogic.ts       # Poker rule primitives
+│       ├── pokerProtocol.ts   # Network/engine message adapter
+│       ├── peerManager.ts     # Yjs/WebRTC transport
+│       ├── persistence.ts     # Host history and session persistence
+│       ├── syncLogic.ts       # Replica snapshot freshness
+│       ├── poker.ts           # Cards and hand evaluation
+│       ├── types.ts           # Poker and wire types
+│       └── *.test.ts
 ├── package.json
 ├── tsconfig.app.json
 ├── tsconfig.json
@@ -131,10 +165,12 @@ let doubled = $derived(count * 2);
 
 ## Pre-commit Checklist
 
-1. Run `npm run check` - no TypeScript errors
-2. Run `npm run lint` - no linting errors
-3. Run `npm run format` - code is formatted
-4. Verify `npm run build` succeeds
+1. Run `npm run format` - code is formatted
+2. Run `npm run check` - no TypeScript errors
+3. Run `npm run lint` - no linting errors
+4. Run `npm test` - unit tests pass
+5. Run relevant E2E tests; use `npm run test:stress` for synchronization/state-engine changes
+6. Verify `npm run build` succeeds
 
 ## Dependencies
 
