@@ -120,6 +120,10 @@ async function playHand(table: BotTable, random: () => number, log: string[]): P
         if (!currentPage) return;
         const before = JSON.stringify(await readState(table.host));
         const action = await chooseAndPerformAction(currentPage, random);
+        if (!action) {
+            await waitForConvergence(table.pages);
+            continue;
+        }
         const actionLog = `round=${(await readState(table.host)).round} action=${action}`;
         log.push(actionLog);
         await expect
@@ -204,7 +208,7 @@ async function queueRandomChecks(
     }
 }
 
-async function chooseAndPerformAction(page: Page, random: () => number): Promise<string> {
+async function chooseAndPerformAction(page: Page, random: () => number): Promise<string | null> {
     const choices: Array<{ name: string; weight: number }> = [];
     if (await page.locator('button[data-action="check"]').isVisible()) {
         choices.push({ name: "check", weight: 55 });
@@ -239,8 +243,11 @@ async function chooseAndPerformAction(page: Page, random: () => number): Promise
                 await page.locator('button[data-action="fold"]').click({ timeout: 1_000 });
                 break;
         }
-    } catch {
-        // A previously queued check can take the turn while this click is in flight.
+    } catch (error) {
+        if (!(await page.locator('button[data-action="fold"]').isVisible())) {
+            return null;
+        }
+        throw error;
     }
     return action;
 }
