@@ -276,15 +276,10 @@ async function restoreSession(
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
     persistenceFailed = false;
 
+    if (savedIsHost && !restoreSavedHostGame(savedGame)) return;
+
     try {
         if (savedIsHost) {
-            if (!savedGame) throw new Error("Missing host game history");
-            pokerGameConfig = savedGame.config;
-            gameEngine = new GameEngine(new PokerGame(savedGame.config), {
-                history: savedGame.history,
-            });
-            setGameSnapshot(gameEngine.snapshot());
-            restoreDealerState(savedGame.dealer, gameEngine.snapshot().state);
             await peerManager.createHost(savedPeerId, savedRoomCode);
             isConnectedToGame = true;
             publishCurrentState();
@@ -294,6 +289,34 @@ async function restoreSession(
         }
     } catch (_error) {
         errorMessage = "Failed to restore connection.";
+    }
+}
+
+function restoreSavedHostGame(savedGame: SavedGame | null): boolean {
+    try {
+        if (!savedGame) throw new Error("Missing host game history");
+        const restoredEngine = new GameEngine(new PokerGame(savedGame.config), {
+            history: savedGame.history,
+        });
+        restoreDealerState(savedGame.dealer, restoredEngine.snapshot().state);
+        pokerGameConfig = savedGame.config;
+        gameEngine = restoredEngine;
+        setGameSnapshot(restoredEngine.snapshot());
+        return true;
+    } catch (error) {
+        console.error("Failed to restore saved host game:", error);
+        disconnectPeerManager();
+        clearGame();
+        clearSession();
+        pokerGameConfig = null;
+        gameEngine = null;
+        gameSnapshot = null;
+        gameState = null;
+        isHost = false;
+        isLoading = false;
+        errorMessage = "The saved game is invalid and has been cleared.";
+        navigate({ name: "home" });
+        return false;
     }
 }
 

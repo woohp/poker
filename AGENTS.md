@@ -89,6 +89,7 @@ Keep these boundaries when adding games: implement another `Game` class and prot
 - Prefer `interface` over `type` for object shapes
 - Use PascalCase for types/interfaces, camelCase for variables/functions
 - Avoid `any` - use `unknown` with type guards instead
+- Do not duplicate guarantees already enforced by TypeScript with runtime checks for internal typed values. Use runtime validation at actual untyped boundaries such as parsed storage or network input, and for semantic constraints the type system cannot express.
 
 ### Svelte Components
 
