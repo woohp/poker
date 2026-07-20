@@ -5,22 +5,24 @@ import {
     applyPotWinners,
     applyPayouts,
     calculatePotAllocations,
-    clearGameState,
-    clearSession,
     createInitialGameState,
     getCurrentPlayerIndex,
     getNextPlayerIndex,
     getValidActions,
     isBettingRoundComplete,
-    loadGameState,
-    loadSession,
     processAction,
     removePlayer,
-    saveGameState,
-    saveSession,
     setCurrentPlayer,
     startNewHand,
 } from "./gameLogic";
+import {
+    clearGameSnapshot as clearGameState,
+    clearSession,
+    loadGameSnapshot as loadGameState,
+    loadSession,
+    saveGameSnapshot as saveGameState,
+    saveSession,
+} from "./persistence";
 import type { GameConfig, GameState } from "./types";
 
 const config: GameConfig = {
@@ -99,9 +101,13 @@ describe("session and game persistence", () => {
     });
 
     it("saves and loads game state", () => {
-        const state = createState(3);
-        saveGameState(state);
-        expect(loadGameState()).toEqual(state);
+        const snapshot = {
+            authorityEpoch: "authority-test",
+            revision: 3,
+            state: createState(3),
+        };
+        saveGameState(snapshot);
+        expect(loadGameState()).toEqual(snapshot);
 
         clearGameState();
         expect(loadGameState()).toBeNull();

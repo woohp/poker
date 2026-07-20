@@ -1,6 +1,6 @@
 import * as Y from "yjs";
 import { WebtorrentProvider } from "y-webtorrent";
-import type { GameState, PeerMessage } from "./types";
+import type { GameSnapshot, PeerMessage } from "./types";
 
 type MessageHandler = (message: PeerMessage, fromPeerId: string) => void;
 type ConnectionChangeHandler = (peerId: string, connected: boolean) => void;
@@ -107,8 +107,8 @@ export class PeerManager {
             }
 
             try {
-                const state = JSON.parse(rawState) as GameState;
-                this.onMessage({ type: "state", state }, "host");
+                const snapshot = JSON.parse(rawState) as GameSnapshot;
+                this.onMessage({ type: "state", snapshot }, "host");
             } catch (error) {
                 console.error("Failed to parse shared game state:", error);
             }
@@ -251,8 +251,8 @@ export class PeerManager {
         ]);
     }
 
-    broadcastState(state: GameState): void {
-        this.stateMap?.set("game", JSON.stringify(state));
+    broadcastState(snapshot: GameSnapshot): void {
+        this.stateMap?.set("game", JSON.stringify(snapshot));
     }
 
     getLocalPeerId(): string {

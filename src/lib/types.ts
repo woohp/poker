@@ -45,8 +45,6 @@ export interface GameConfig {
 }
 
 export interface GameState {
-    authorityEpoch: string;
-    revision: number;
     players: Player[];
     phase: GamePhase;
     pot: number;
@@ -92,18 +90,24 @@ export type CommandRejectionReason =
     | "wrong-hand"
     | "wrong-player";
 
+export interface GameSnapshot {
+    authorityEpoch: string;
+    revision: number;
+    state: GameState;
+}
+
 export interface CommandResultMessage {
     type: "commandResult";
     commandId: string;
     accepted: boolean;
     revision: number;
     reason?: CommandRejectionReason;
-    state?: GameState;
+    snapshot?: GameSnapshot;
 }
 
 export interface StateUpdateMessage {
     type: "state";
-    state: GameState;
+    snapshot: GameSnapshot;
 }
 
 export interface JoinRequestMessage {
@@ -118,7 +122,7 @@ export interface JoinResponseMessage {
     requestId: string;
     accepted: boolean;
     playerId?: string;
-    state?: GameState;
+    snapshot?: GameSnapshot;
     message?: string;
 }
 

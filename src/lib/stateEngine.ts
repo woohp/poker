@@ -89,6 +89,14 @@ export class AuthoritativeStateEngine<State, Command, Context, Reason extends st
         return result;
     }
 
+    commit(current: VersionedState<State>, state: State): VersionedState<State> {
+        return {
+            epoch: current.epoch,
+            revision: current.revision + 1,
+            value: this.clone(state),
+        };
+    }
+
     getAcceptedState(commandId: string): VersionedState<State> | null {
         const cached = this.results.get(commandId);
         if (!cached?.result.accepted) return null;

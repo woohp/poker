@@ -1,8 +1,9 @@
-import type { GameState } from "./types";
+import type { GameSnapshot } from "./types";
 
-export function shouldApplyState(
-    currentState: GameState | null,
-    incomingState: GameState,
-): boolean {
-    return currentState === null || incomingState.revision > currentState.revision;
+export function shouldApplyState(current: GameSnapshot | null, incoming: GameSnapshot): boolean {
+    return (
+        current === null ||
+        incoming.authorityEpoch !== current.authorityEpoch ||
+        incoming.revision > current.revision
+    );
 }

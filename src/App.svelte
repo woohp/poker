@@ -1,25 +1,27 @@
 <script lang="ts">
 import QRCode from "qrcode";
 import { onDestroy, onMount } from "svelte";
-import { GameCommandProcessor, type ProcessedCommand } from "./lib/commandProcessor";
+import { GameAuthority, type AuthorityCommandResult } from "./lib/gameAuthority";
 import {
     addPlayer,
     advancePhase,
     applyPotWinners,
     calculatePotAllocations,
-    clearSession,
     createInitialGameState,
     getValidActions,
     isBettingRoundComplete,
-    loadGameState,
-    loadSession,
     removePlayer,
-    saveGameState,
-    saveSession,
     startNewHand,
 } from "./lib/gameLogic";
 import { getStablePeerId, loadStablePeerId, resetStablePeerId } from "./lib/peerIdentity";
 import { PeerManager } from "./lib/peerManager";
+import {
+    clearSession,
+    loadGameSnapshot,
+    loadSession,
+    saveGameSnapshot,
+    saveSession,
+} from "./lib/persistence";
 import { compareHands, createShuffledDeck, evaluateHand, formatCard } from "./lib/poker";
 import { navigate, parseRoute, type Route } from "./lib/router";
 import { shouldApplyState } from "./lib/syncLogic";
@@ -28,6 +30,7 @@ import type {
     Card,
     GameConfig,
     GameMode,
+    GameSnapshot,
     GameState,
     PeerMessage,
     Player,
@@ -38,7 +41,8 @@ let route: Route = $state({ name: "home" });
 let isLoading = $state(false);
 let isConnectedToGame = $state(false);
 let peerManager: PeerManager | null = $state(null);
-let commandProcessor = new GameCommandProcessor();
+let gameAuthority = new GameAuthority();
+let gameSnapshot: GameSnapshot | null = $state(null);
 let gameState: GameState | null = $state(null);
 let playerName = $state("");
 let joinCode = $state("");
@@ -88,7 +92,7 @@ onMount(() => {
     window.addEventListener("popstate", syncRoute);
     window.addEventListener("pagehide", announceDeparture);
 
-    const saved = loadGameState();
+    const saved = loadGameSnapshot();
     const session = loadSession();
     const savedPeerId = loadStablePeerId();
 
@@ -102,7 +106,7 @@ onMount(() => {
 
     if (route.name === "room") {
         if (saved && session && savedPeerId && route.roomCode === session.roomCode) {
-            gameState = saved;
+            setGameSnapshot(saved);
             playerName = session.playerName;
             localPlayerId = savedPeerId;
             roomCode = session.roomCode;
@@ -183,10 +187,19 @@ function disconnectPeerManager() {
     isConnectedToGame = false;
 }
 
+function setGameSnapshot(snapshot: GameSnapshot) {
+    gameSnapshot = snapshot;
+    gameState = snapshot.state;
+}
+
 function publishState(state: GameState, incrementRevision = true) {
-    if (incrementRevision) state.revision += 1;
-    peerManager?.broadcastState(state);
-    saveGameState(state);
+    if (!gameSnapshot) return;
+    const snapshot = incrementRevision
+        ? gameAuthority.commit(gameSnapshot, state)
+        : { ...gameSnapshot, state };
+    setGameSnapshot(snapshot);
+    peerManager?.broadcastState(snapshot);
+    saveGameSnapshot(snapshot);
 }
 
 async function restoreSession(
@@ -194,17 +207,17 @@ async function restoreSession(
     savedPlayerName: string,
     savedPeerId: string,
     savedIsHost: boolean,
-    savedState: GameState,
+    savedSnapshot: GameSnapshot,
 ) {
     disconnectPeerManager();
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
 
     try {
         if (savedIsHost) {
-            restoreDealerState(savedState.round);
+            restoreDealerState(savedSnapshot.state.round);
             await peerManager.createHost(savedPeerId, savedRoomCode);
             isConnectedToGame = true;
-            publishState(savedState);
+            publishState(savedSnapshot.state);
             setTimeout(() => generateQRCode(savedRoomCode), 100);
         } else {
             await peerManager.joinGame(savedRoomCode, savedPlayerName, savedPeerId);
@@ -223,7 +236,7 @@ function handlePeerMessage(message: PeerMessage, fromPeerId: string) {
 }
 
 function handleHostMessage(message: PeerMessage, fromPeerId: string) {
-    if (!gameState) return;
+    if (!gameSnapshot || !gameState) return;
 
     switch (message.type) {
         case "join": {
@@ -244,7 +257,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
                     requestId: message.requestId,
                     accepted: true,
                     playerId: existing.id,
-                    state: gameState,
+                    snapshot: gameSnapshot,
                 });
                 sendHoleCards(existing.id);
                 return;
@@ -277,7 +290,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
                     requestId: message.requestId,
                     accepted: true,
                     playerId: player.id,
-                    state: gameState,
+                    snapshot: { ...gameSnapshot, state: gameState },
                 });
                 publishState(gameState);
             } else {
@@ -298,7 +311,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             break;
         }
         case "action": {
-            const processed = commandProcessor.process(gameState, message, fromPeerId);
+            const processed = gameAuthority.processRemote(gameSnapshot, message, fromPeerId);
             if (processed.result.accepted && !processed.duplicate) {
                 commitProcessedCommand(processed);
             }
@@ -310,36 +323,23 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
 
 function applyHostAction(
     playerId: string,
-    action: "fold" | "check" | "call" | "raise" | "allin",
+    action: PlayerAction,
     amount?: number,
 ): boolean {
-    if (!gameState) return false;
+    if (!gameSnapshot) return false;
 
-    const processed = commandProcessor.process(
-        gameState,
-        {
-            type: "action",
-            commandId: crypto.randomUUID(),
-            authorityEpoch: gameState.authorityEpoch,
-            playerId,
-            round: gameState.round,
-            expectedRevision: gameState.revision,
-            action,
-            amount,
-        },
-        playerId,
-    );
+    const processed = gameAuthority.processLocal(gameSnapshot, playerId, action, amount);
     if (!processed.result.accepted) return false;
 
     commitProcessedCommand(processed);
     return true;
 }
 
-function commitProcessedCommand(processed: ProcessedCommand) {
-    gameState = processed.state;
-    publishState(gameState, false);
+function commitProcessedCommand(processed: AuthorityCommandResult) {
+    setGameSnapshot(processed.snapshot);
+    publishState(processed.snapshot.state, false);
 
-    if (isBettingRoundComplete(gameState)) {
+    if (isBettingRoundComplete(processed.snapshot.state)) {
         setTimeout(() => {
             const gs = gameState;
             if (gs && gs.phase !== "showdown") {
@@ -360,15 +360,15 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
         }
         case "state": {
             isConnectedToGame = true;
-            applyIncomingState(message.state);
+            applyIncomingSnapshot(message.snapshot);
             break;
         }
         case "commandResult": {
-            if (message.state) applyIncomingState(message.state);
+            if (message.snapshot) applyIncomingSnapshot(message.snapshot);
             if (pendingCommand?.message.commandId !== message.commandId) break;
 
             if (message.accepted) {
-                if (gameState && gameState.revision >= message.revision) {
+                if (gameSnapshot && gameSnapshot.revision >= message.revision) {
                     pendingCommand = null;
                 } else {
                     pendingCommand.targetRevision = message.revision;
@@ -380,9 +380,9 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
             break;
         }
         case "joinResponse": {
-            if (message.accepted && message.state && message.playerId) {
+            if (message.accepted && message.snapshot && message.playerId) {
                 isConnectedToGame = true;
-                applyIncomingState(message.state);
+                applyIncomingSnapshot(message.snapshot);
                 localPlayerId = message.playerId;
                 roomCode = joinCode.trim() || roomCode;
                 isLoading = false;
@@ -403,27 +403,27 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
     }
 }
 
-function applyIncomingState(state: GameState): boolean {
-    if (!shouldApplyState(gameState, state)) {
+function applyIncomingSnapshot(snapshot: GameSnapshot): boolean {
+    if (!shouldApplyState(gameSnapshot, snapshot)) {
         return false;
     }
 
-    gameState = state;
+    setGameSnapshot(snapshot);
     if (
         pendingCommand &&
-        gameState.revision >= (pendingCommand.targetRevision ?? pendingCommand.message.expectedRevision + 1)
+        snapshot.revision >= (pendingCommand.targetRevision ?? pendingCommand.message.expectedRevision + 1)
     ) {
         pendingCommand = null;
         commandFeedback = "";
     }
-    saveGameState(gameState);
-    if (localHoleRound !== gameState.round) localHoleCards = [];
+    saveGameSnapshot(snapshot);
+    if (localHoleRound !== snapshot.state.round) localHoleCards = [];
     if (
-        gameState.config.mode === "digital" &&
-        gameState.phase !== "waiting" &&
-        localHoleRound !== gameState.round
+        snapshot.state.config.mode === "digital" &&
+        snapshot.state.phase !== "waiting" &&
+        localHoleRound !== snapshot.state.round
     ) {
-        scheduleHoleCardRequests(gameState.round);
+        scheduleHoleCardRequests(snapshot.state.round);
     }
     return true;
 }
@@ -462,7 +462,7 @@ async function createGame() {
     errorMessage = "";
     isLoading = true;
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
-    commandProcessor = new GameCommandProcessor();
+    gameAuthority = new GameAuthority();
     isHost = true;
 
     try {
@@ -473,8 +473,13 @@ async function createGame() {
         roomCode = peerManager.getRoomCode();
 
         const config: GameConfig = { mode: gameMode, startingChips, smallBlind, bigBlind, ante };
-        gameState = createInitialGameState(config, playerName, peerId);
-        publishState(gameState);
+        const initialState = createInitialGameState(config, playerName, peerId);
+        setGameSnapshot({
+            authorityEpoch: crypto.randomUUID(),
+            revision: 0,
+            state: initialState,
+        });
+        publishState(initialState);
         saveSession({ isHost: true, roomCode, playerName });
         isLoading = false;
         navigate({ name: "room", roomCode });
@@ -668,7 +673,7 @@ function settleDigitalShowdown() {
 }
 
 function performAction(action: PlayerAction) {
-    if (!gameState || pendingCommand) return;
+    if (!gameSnapshot || !gameState || pendingCommand) return;
 
     autoCheckRequested = false;
     commandFeedback = "";
@@ -684,10 +689,10 @@ function performAction(action: PlayerAction) {
         const message: ActionMessage = {
             type: "action",
             commandId: crypto.randomUUID(),
-            authorityEpoch: gameState.authorityEpoch,
+            authorityEpoch: gameSnapshot.authorityEpoch,
             playerId: localPlayerId,
             round: gameState.round,
-            expectedRevision: gameState.revision,
+            expectedRevision: gameSnapshot.revision,
             action,
             amount,
         };

@@ -65,6 +65,20 @@ describe("AuthoritativeStateEngine", () => {
         expect(current.value.count).toBe(2);
     });
 
+    it("versions authoritative state changes that do not come from player commands", () => {
+        const engine = createEngine();
+        const current = createState();
+
+        const committed = engine.commit(current, { count: 8 });
+
+        expect(committed).toEqual({
+            epoch: "authority-1",
+            revision: 5,
+            value: { count: 8 },
+        });
+        expect(current.value.count).toBe(2);
+    });
+
     it("returns the original result for duplicate command IDs", () => {
         const engine = createEngine();
         const command = createCommand();

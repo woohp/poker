@@ -5,47 +5,12 @@ export interface PotAllocation {
     eligiblePlayerIds: string[];
 }
 
-const STORAGE_KEY = "poker_game_state";
-const SESSION_KEY = "poker_session";
-
-export interface SessionData {
-    isHost: boolean;
-    roomCode: string;
-    playerName: string;
-}
-
-export function saveSession(data: SessionData): void {
-    try {
-        localStorage.setItem(SESSION_KEY, JSON.stringify(data));
-    } catch (error) {
-        console.error("Failed to save session:", error);
-    }
-}
-
-export function loadSession(): SessionData | null {
-    try {
-        const saved = localStorage.getItem(SESSION_KEY);
-        if (saved) {
-            return JSON.parse(saved) as SessionData;
-        }
-    } catch (error) {
-        console.error("Failed to load session:", error);
-    }
-    return null;
-}
-
-export function clearSession(): void {
-    localStorage.removeItem(SESSION_KEY);
-}
-
 export function createInitialGameState(
     config: GameConfig,
     hostPlayerName: string,
     hostPeerId: string,
 ): GameState {
     return {
-        authorityEpoch: crypto.randomUUID(),
-        revision: 0,
         players: [createPlayer(hostPeerId, hostPlayerName, config.startingChips, true)],
         phase: "waiting",
         pot: 0,
@@ -58,33 +23,6 @@ export function createInitialGameState(
         statusMessage: "Waiting for players",
         lastPayouts: [],
     };
-}
-
-export function saveGameState(state: GameState): void {
-    try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (error) {
-        console.error("Failed to save game state:", error);
-    }
-}
-
-export function loadGameState(): GameState | null {
-    try {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-            const state = JSON.parse(saved) as GameState;
-            state.authorityEpoch ??= "legacy";
-            state.revision ??= 0;
-            return state;
-        }
-    } catch (error) {
-        console.error("Failed to load game state:", error);
-    }
-    return null;
-}
-
-export function clearGameState(): void {
-    localStorage.removeItem(STORAGE_KEY);
 }
 
 export function getNextPlayerIndex(players: Player[], currentIndex: number): number {
@@ -291,7 +229,6 @@ export function processAction(
         if (winner) {
             applyPayouts(state, [{ playerId: winner.id, amount: state.pot }]);
         }
-        saveGameState(state);
         return true;
     }
 
@@ -302,7 +239,6 @@ export function processAction(
     }
 
     state.statusMessage = `${player.name} ${describeAction(action, amount)}`;
-    saveGameState(state);
     return true;
 }
 
@@ -328,7 +264,6 @@ export function startNewHand(state: GameState): void {
     const activePlayers = state.players.filter((player) => player.isActive);
     if (activePlayers.length < 2) {
         state.statusMessage = "Need at least 2 players with chips to start a hand";
-        saveGameState(state);
         return;
     }
 
@@ -348,8 +283,6 @@ export function startNewHand(state: GameState): void {
         setCurrentPlayer(state.players, state.players[firstToAct].id);
     }
     state.statusMessage = `Hand ${state.round}`;
-
-    saveGameState(state);
 }
 
 export function advancePhase(state: GameState): void {
@@ -375,7 +308,6 @@ export function advancePhase(state: GameState): void {
         case "river":
             state.phase = "showdown";
             state.statusMessage = "Showdown";
-            saveGameState(state);
             return;
     }
 
@@ -386,7 +318,6 @@ export function advancePhase(state: GameState): void {
     }
 
     state.statusMessage = `${capitalize(state.phase)} betting`;
-    saveGameState(state);
 }
 
 export function isBettingRoundComplete(state: GameState): boolean {
@@ -410,7 +341,6 @@ export function addPlayer(state: GameState, name: string, peerId: string): Playe
 
     const player = createPlayer(peerId, name, state.config.startingChips, false);
     state.players.push(player);
-    saveGameState(state);
     return player;
 }
 
@@ -418,7 +348,6 @@ export function removePlayer(state: GameState, playerId: string): void {
     const index = state.players.findIndex((player) => player.id === playerId);
     if (index >= 0) {
         state.players.splice(index, 1);
-        saveGameState(state);
     }
 }
 
@@ -457,7 +386,6 @@ export function applyPayouts(
         .map((payout) => `${payout.playerName} wins ${payout.amount}`)
         .join(" • ");
     state.pot = 0;
-    saveGameState(state);
     return true;
 }
 

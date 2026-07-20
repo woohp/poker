@@ -1,30 +1,36 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createInitialGameState } from "./gameLogic";
 import { shouldApplyState } from "./syncLogic";
-import type { GameState } from "./types";
+import type { GameSnapshot } from "./types";
 
-function createState(revision: number): GameState {
-    const state = createInitialGameState(
-        {
-            mode: "physical",
-            startingChips: 1000,
-            smallBlind: 5,
-            bigBlind: 10,
-            ante: 0,
-        },
-        "Host",
-        "host",
-    );
-    state.revision = revision;
-    return state;
+function createSnapshot(revision: number, authorityEpoch = "authority-1"): GameSnapshot {
+    return {
+        authorityEpoch,
+        revision,
+        state: createInitialGameState(
+            {
+                mode: "physical",
+                startingChips: 1000,
+                smallBlind: 5,
+                bigBlind: 10,
+                ante: 0,
+            },
+            "Host",
+            "host",
+        ),
+    };
 }
 
 describe("state synchronization", () => {
     it("ignores a delayed state older than the state already applied", () => {
-        expect(shouldApplyState(createState(12), createState(11))).toBe(false);
+        expect(shouldApplyState(createSnapshot(12), createSnapshot(11))).toBe(false);
     });
 
     it("accepts a newer authoritative state", () => {
-        expect(shouldApplyState(createState(11), createState(12))).toBe(true);
+        expect(shouldApplyState(createSnapshot(11), createSnapshot(12))).toBe(true);
+    });
+
+    it("accepts a snapshot from a new authority epoch", () => {
+        expect(shouldApplyState(createSnapshot(12), createSnapshot(1, "authority-2"))).toBe(true);
     });
 });

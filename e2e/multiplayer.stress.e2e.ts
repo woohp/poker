@@ -285,7 +285,7 @@ async function readState(page: Page): Promise<StoredState> {
     return page.evaluate(() => {
         const raw = localStorage.getItem("poker_game_state");
         if (!raw) throw new Error("No saved game state");
-        return JSON.parse(raw) as StoredState;
+        return (JSON.parse(raw) as { state: StoredState }).state;
     });
 }
 

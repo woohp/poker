@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type * as Y from "yjs";
-import type { GameState, PeerMessage } from "./types";
+import type { GameSnapshot, GameState, PeerMessage } from "./types";
 
 interface MockProviderInstance {
     roomName: string;
@@ -110,8 +110,6 @@ function parseLastMessage(doc: Y.Doc): unknown {
 
 function sampleState(): GameState {
     return {
-        authorityEpoch: "authority-test",
-        revision: 0,
         players: [],
         phase: "waiting",
         pot: 0,
@@ -129,6 +127,14 @@ function sampleState(): GameState {
         },
         statusMessage: "",
         lastPayouts: [],
+    };
+}
+
+function sampleSnapshot(revision = 0): GameSnapshot {
+    return {
+        authorityEpoch: "authority-test",
+        revision,
+        state: sampleState(),
     };
 }
 
@@ -191,16 +197,16 @@ describe("PeerManager", () => {
         await peerManager.createHost("host-2", "room-3");
 
         const provider = webtorrentMock.instances[0]!;
-        const state = sampleState();
+        const snapshot = sampleSnapshot();
 
         peerManager.sendToPeer("guest-2", {
             type: "joinResponse",
             requestId: "request-2",
             accepted: true,
             playerId: "guest-2",
-            state,
+            snapshot,
         });
-        peerManager.broadcastState(state);
+        peerManager.broadcastState(snapshot);
 
         const message = parseLastMessage(provider.doc) as {
             to: string | null;
@@ -213,7 +219,7 @@ describe("PeerManager", () => {
             accepted: true,
             playerId: "guest-2",
         });
-        expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(state));
+        expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(snapshot));
     });
 
     it("broadcasts state through Yjs without a second unordered direct delivery", async () => {
@@ -225,31 +231,31 @@ describe("PeerManager", () => {
 
         const provider = webtorrentMock.instances[0]!;
         provider.awareness.setRemotePeerIds(["peer-a", "peer-b"]);
-        const state = sampleState();
-        state.pot = 75;
+        const snapshot = sampleSnapshot();
+        snapshot.state.pot = 75;
 
-        peerManager.broadcastState(state);
+        peerManager.broadcastState(snapshot);
 
-        expect(state.revision).toBe(0);
-        expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(state));
+        expect(snapshot.revision).toBe(0);
+        expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(snapshot));
         expect(provider.sentDirectMessages).toHaveLength(0);
     });
 
     it("keeps the newest Yjs state", async () => {
-        const receivedStates: GameState[] = [];
+        const receivedStates: GameSnapshot[] = [];
         const peerManager = new PeerManager(
             (message) => {
-                if (message.type === "state") receivedStates.push(message.state);
+                if (message.type === "state") receivedStates.push(message.snapshot);
             },
             () => {},
         );
         await peerManager.joinGame("room-state-order", "Guest", "guest-state-order");
 
         const provider = webtorrentMock.instances[0]!;
-        const olderState = sampleState();
-        olderState.pot = 10;
-        const newerState = sampleState();
-        newerState.pot = 20;
+        const olderState = sampleSnapshot(1);
+        olderState.state.pot = 10;
+        const newerState = sampleSnapshot(2);
+        newerState.state.pot = 20;
 
         provider.doc.getMap<string>("state").set("game", JSON.stringify(olderState));
         provider.doc.getMap<string>("state").set("game", JSON.stringify(newerState));
@@ -354,7 +360,7 @@ describe("PeerManager", () => {
             requestId: joinEnvelope.message.requestId,
             accepted: true,
             playerId: "guest-4",
-            state: sampleState(),
+            snapshot: sampleSnapshot(),
         };
         provider.doc.getArray<string>("messages").push([
             JSON.stringify({
@@ -386,12 +392,12 @@ describe("PeerManager", () => {
         await peerManager.joinGame("room-6", "Dana", "guest-5");
 
         const provider = webtorrentMock.instances[0]!;
-        const state = sampleState();
-        state.pot = 55;
+        const snapshot = sampleSnapshot();
+        snapshot.state.pot = 55;
 
-        provider.doc.getMap<string>("state").set("game", JSON.stringify(state));
+        provider.doc.getMap<string>("state").set("game", JSON.stringify(snapshot));
 
-        expect(onMessage).toHaveBeenCalledWith({ type: "state", state }, "host");
+        expect(onMessage).toHaveBeenCalledWith({ type: "state", snapshot }, "host");
     });
 
     it("emits peer connect and disconnect changes from awareness", async () => {
