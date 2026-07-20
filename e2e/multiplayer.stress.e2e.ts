@@ -200,7 +200,8 @@ async function queueRandomChecks(
     for (const page of pages) {
         if (page === currentPage || random() >= 0.15) continue;
         const check = page.locator("button[data-queue-check]");
-        if ((await check.isVisible()) && (await check.isEnabled())) {
+        const canQueue = await check.isEnabled({ timeout: 100 }).catch(() => false);
+        if (canQueue && (await check.isVisible())) {
             await check.click({ timeout: 500 }).catch(() => {
                 // Another queued check can advance the turn while this optional click is in flight.
             });

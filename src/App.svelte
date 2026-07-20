@@ -23,10 +23,20 @@ import { PeerManager } from "./lib/peerManager";
 import { compareHands, createShuffledDeck, evaluateHand, formatCard } from "./lib/poker";
 import { navigate, parseRoute, type Route } from "./lib/router";
 import { shouldApplyState } from "./lib/syncLogic";
-import type { Card, GameConfig, GameMode, GameState, PeerMessage, Player } from "./lib/types";
+import type {
+    ActionMessage,
+    Card,
+    GameConfig,
+    GameMode,
+    GameState,
+    PeerMessage,
+    Player,
+    PlayerAction,
+} from "./lib/types";
 
 let route: Route = $state({ name: "home" });
 let isLoading = $state(false);
+let isConnectedToGame = $state(false);
 let peerManager: PeerManager | null = $state(null);
 let commandProcessor = new GameCommandProcessor();
 let gameState: GameState | null = $state(null);
@@ -34,6 +44,10 @@ let playerName = $state("");
 let joinCode = $state("");
 let roomCode = $state("");
 let errorMessage = $state("");
+let commandFeedback = $state("");
+let pendingCommand: { message: ActionMessage; targetRevision: number | null } | null = $state(
+    null,
+);
 let qrCanvas: HTMLCanvasElement | null = $state(null);
 
 let startingChips = $state(1000);
@@ -166,6 +180,7 @@ function announceDeparture() {
 function disconnectPeerManager() {
     peerManager?.disconnect();
     peerManager = null;
+    isConnectedToGame = false;
 }
 
 async function restoreSession(
@@ -182,6 +197,7 @@ async function restoreSession(
         if (savedIsHost) {
             restoreDealerState(savedState.round);
             await peerManager.createHost(savedPeerId, savedRoomCode);
+            isConnectedToGame = true;
             peerManager.broadcastState(savedState);
             setTimeout(() => generateQRCode(savedRoomCode), 100);
         } else {
@@ -338,15 +354,29 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
             break;
         }
         case "state": {
+            isConnectedToGame = true;
             applyIncomingState(message.state);
             break;
         }
         case "commandResult": {
             if (message.state) applyIncomingState(message.state);
+            if (pendingCommand?.message.commandId !== message.commandId) break;
+
+            if (message.accepted) {
+                if (gameState && gameState.revision >= message.revision) {
+                    pendingCommand = null;
+                } else {
+                    pendingCommand.targetRevision = message.revision;
+                }
+            } else {
+                pendingCommand = null;
+                commandFeedback = describeCommandRejection(message.reason);
+            }
             break;
         }
         case "joinResponse": {
             if (message.accepted && message.state && message.playerId) {
+                isConnectedToGame = true;
                 applyIncomingState(message.state);
                 localPlayerId = message.playerId;
                 roomCode = joinCode.trim() || roomCode;
@@ -374,6 +404,13 @@ function applyIncomingState(state: GameState): boolean {
     }
 
     gameState = state;
+    if (
+        pendingCommand &&
+        gameState.revision >= (pendingCommand.targetRevision ?? pendingCommand.message.expectedRevision + 1)
+    ) {
+        pendingCommand = null;
+        commandFeedback = "";
+    }
     saveGameState(gameState);
     if (localHoleRound !== gameState.round) localHoleCards = [];
     if (
@@ -390,6 +427,7 @@ function handleConnectionChange(peerId: string, connected: boolean) {
     if (!gameState) return;
 
     if (connected) {
+        isConnectedToGame = true;
         if (isHost) {
             peerManager?.broadcastState(gameState);
         } else if (gameState.config.mode === "digital") {
@@ -398,7 +436,13 @@ function handleConnectionChange(peerId: string, connected: boolean) {
         return;
     }
 
-    if (!isHost || gameState.phase !== "waiting") return;
+    if (!isHost) {
+        if (gameState.players.find((player) => player.isHost)?.id === peerId) {
+            isConnectedToGame = false;
+        }
+        return;
+    }
+    if (gameState.phase !== "waiting") return;
 
     removePlayer(gameState, peerId);
     peerManager?.broadcastState(gameState);
@@ -420,6 +464,7 @@ async function createGame() {
     try {
         const peerId = getStablePeerId();
         await peerManager.createHost(peerId);
+        isConnectedToGame = true;
         localPlayerId = peerId;
         roomCode = peerManager.getRoomCode();
 
@@ -621,10 +666,11 @@ function settleDigitalShowdown() {
     applyPotWinners(gameState, winnersByPot);
 }
 
-function performAction(action: "fold" | "check" | "call" | "raise" | "allin") {
-    if (!gameState) return;
+function performAction(action: PlayerAction) {
+    if (!gameState || pendingCommand) return;
 
     autoCheckRequested = false;
+    commandFeedback = "";
     const amount = action === "raise" ? raiseAmount : undefined;
 
     if (isHost) {
@@ -634,7 +680,7 @@ function performAction(action: "fold" | "check" | "call" | "raise" | "allin") {
 
     const hostId = gameState.players.find((player) => player.isHost)?.id;
     if (hostId) {
-        peerManager?.sendToPeer(hostId, {
+        const message: ActionMessage = {
             type: "action",
             commandId: crypto.randomUUID(),
             playerId: localPlayerId,
@@ -642,7 +688,38 @@ function performAction(action: "fold" | "check" | "call" | "raise" | "allin") {
             expectedRevision: gameState.revision,
             action,
             amount,
-        });
+        };
+        pendingCommand = { message, targetRevision: null };
+        peerManager?.sendToPeer(hostId, message);
+        scheduleCommandRetry(hostId, message);
+    }
+}
+
+function scheduleCommandRetry(hostId: string, message: ActionMessage) {
+    setTimeout(() => {
+        if (pendingCommand?.message.commandId === message.commandId) {
+            peerManager?.sendToPeer(hostId, message);
+        }
+    }, 1500);
+
+    setTimeout(() => {
+        if (pendingCommand?.message.commandId === message.commandId) {
+            pendingCommand = null;
+            commandFeedback = "The host did not confirm the action. Please try again.";
+        }
+    }, 5000);
+}
+
+function describeCommandRejection(reason: string | undefined): string {
+    switch (reason) {
+        case "wrong-player":
+            return "The host rejected an action for another player.";
+        case "wrong-hand":
+            return "The hand advanced before this action arrived.";
+        case "stale-state":
+            return "The turn changed before this action arrived.";
+        default:
+            return "The host rejected this action.";
     }
 }
 
@@ -653,7 +730,7 @@ function getMyPlayer(): Player | null {
 
 function canPerformAction(action: "fold" | "check" | "call" | "raise" | "allin"): boolean {
     const me = getMyPlayer();
-    if (!me || !gameState) return false;
+    if (!me || !gameState || (!isHost && !isConnectedToGame)) return false;
     return getValidActions(gameState, me).includes(action);
 }
 
@@ -1155,6 +1232,9 @@ function nextPhase() {
                         {/if}
 
                         <div class="bg-black/12 backdrop-blur-sm rounded-2xl p-5 shadow-lg ring-1 ring-white/10">
+                            {#if commandFeedback}
+                                <p class="text-center text-amber-100 font-semibold mb-3" aria-live="polite">{commandFeedback}</p>
+                            {/if}
                             {#if getMyPlayer()?.isCurrentTurn}
                                 <div>
                                     <div class="text-center mb-4">
@@ -1167,35 +1247,41 @@ function nextPhase() {
                                                     min={calculateMinRaise()}
                                                     max={(getMyPlayer()?.chips || 0) + (getMyPlayer()?.currentBet || 0)}
                                                     placeholder="Raise amount"
-                                                    class="px-4 py-2.5 border-2 border-white/70 rounded-xl w-36 bg-white/95 text-slate-900 placeholder:text-slate-400 font-semibold shadow-sm"
+                                                    disabled={pendingCommand !== null}
+                                                    class="px-4 py-2.5 border-2 border-white/70 rounded-xl w-36 bg-white/95 text-slate-900 placeholder:text-slate-400 font-semibold shadow-sm disabled:opacity-60"
                                                 />
                                             </div>
                                         {/if}
                                     </div>
                                     
+                                    {#if pendingCommand}
+                                        <p class="text-center text-white font-semibold mb-3" aria-live="polite">
+                                            Submitting {pendingCommand.message.action}…
+                                        </p>
+                                    {/if}
                                     <div class="flex flex-wrap gap-2 justify-center">
                                         {#if canPerformAction("fold")}
-                                            <button data-action="fold" class="py-2 px-4 bg-red-500 text-white rounded-lg font-bold" onclick={() => performAction("fold")}>
+                                            <button data-action="fold" disabled={pendingCommand !== null} class="py-2 px-4 bg-red-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("fold")}>
                                                 Fold
                                             </button>
                                         {/if}
                                         {#if canPerformAction("check")}
-                                            <button data-action="check" class="py-2 px-4 bg-gray-400 text-white rounded-lg font-bold" onclick={() => performAction("check")}>
+                                            <button data-action="check" disabled={pendingCommand !== null} class="py-2 px-4 bg-gray-400 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("check")}>
                                                 Check
                                             </button>
                                         {/if}
                                         {#if canPerformAction("call")}
-                                            <button data-action="call" class="py-2 px-4 bg-blue-500 text-white rounded-lg font-bold" onclick={() => performAction("call")}>
+                                            <button data-action="call" disabled={pendingCommand !== null} class="py-2 px-4 bg-blue-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("call")}>
                                                 Call {calculateToCall()}
                                             </button>
                                         {/if}
                                         {#if canPerformAction("raise")}
-                                            <button data-action="raise" class="py-2 px-4 bg-purple-500 text-white rounded-lg font-bold" onclick={() => performAction("raise")}>
+                                            <button data-action="raise" disabled={pendingCommand !== null} class="py-2 px-4 bg-purple-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("raise")}>
                                                 Raise
                                             </button>
                                         {/if}
                                         {#if canPerformAction("allin")}
-                                            <button data-action="allin" class="py-2 px-4 bg-yellow-500 text-white rounded-lg font-bold" onclick={() => performAction("allin")}>
+                                            <button data-action="allin" disabled={pendingCommand !== null} class="py-2 px-4 bg-yellow-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("allin")}>
                                                 All In
                                             </button>
                                         {/if}

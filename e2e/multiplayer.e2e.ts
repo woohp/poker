@@ -35,6 +35,59 @@ test("a player can join and leave a game", async ({ browser }) => {
     await hostContext.close();
 });
 
+test("a player can refresh during their turn and continue", async ({ browser }) => {
+    const { hostContext, guestContext, host, guest } = await joinGame(browser);
+
+    try {
+        await host.getByText("Start Game", { exact: true }).click();
+        let currentPage = host;
+        await expect
+            .poll(async () => {
+                if (await host.locator('button[data-action="fold"]').isVisible()) {
+                    currentPage = host;
+                    return "ready";
+                }
+                if (await guest.locator('button[data-action="fold"]').isVisible()) {
+                    currentPage = guest;
+                    return "ready";
+                }
+                return "waiting";
+            })
+            .toBe("ready");
+
+        await currentPage.reload();
+        await expect(currentPage.locator('button[data-action="fold"]')).toBeVisible({
+            timeout: 15_000,
+        });
+        await currentPage.locator('button[data-action="fold"]').click();
+
+        let outcome = "waiting";
+        await expect
+            .poll(async () => {
+                if (await host.getByText("New Hand", { exact: true }).isVisible()) {
+                    outcome = "complete";
+                } else if (
+                    await currentPage
+                        .getByText("The turn changed before this action arrived.", { exact: true })
+                        .isVisible()
+                ) {
+                    outcome = "recovered";
+                }
+                return outcome;
+            })
+            .not.toBe("waiting");
+
+        if (outcome === "recovered") {
+            await expect(currentPage.locator('button[data-action="fold"]')).toBeEnabled();
+            await currentPage.locator('button[data-action="fold"]').click();
+        }
+
+        await expect(host.getByText("New Hand", { exact: true })).toBeVisible({ timeout: 10_000 });
+    } finally {
+        await Promise.all([hostContext.close(), guestContext.close()]);
+    }
+});
+
 test("four players can act in turn", async ({ browser }) => {
     const contexts = await Promise.all(Array.from({ length: 4 }, () => browser.newContext()));
     const pages = await Promise.all(contexts.map((context) => context.newPage()));
