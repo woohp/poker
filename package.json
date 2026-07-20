@@ -12,7 +12,8 @@
         "format": "vp fmt --write",
         "test": "vp test run",
         "test:e2e": "playwright test",
-        "e2e:app": "VITE_TRACKER_URLS=ws://127.0.0.1:8000 vp dev --host 127.0.0.1 --port 4173",
+        "test:stress": "POKER_STRESS=1 playwright test e2e/multiplayer.stress.e2e.ts --workers=1",
+        "e2e:app": "VITE_TRACKER_URLS=ws://127.0.0.1:8000 VITE_PHASE_ADVANCE_DELAY_MS=25 vp dev --host 127.0.0.1 --port 4173",
         "e2e:tracker": "tsx node_modules/wt-tracker/src/run-tracker.ts e2e/tracker.config.json",
         "postinstall": "patch-package"
     },
@@ -45,5 +46,9 @@
         "vite": "npm:@voidzero-dev/vite-plus-core@latest",
         "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
     },
-    "packageManager": "npm@11.12.1"
+    "packageManager": "npm@11.12.1",
+    "allowScripts": {
+        "webrtc-data-peer@0.1.0": true,
+        "y-webtorrent@0.1.0": true
+    }
 }

@@ -51,6 +51,7 @@ let localHoleRound = $state(0);
 let hostDeck: Card[] = [];
 let hostHoleCards = new Map<string, Card[]>();
 const DEALER_STORAGE_KEY = "poker_private_dealer_state";
+const PHASE_ADVANCE_DELAY_MS = Number(import.meta.env.VITE_PHASE_ADVANCE_DELAY_MS || 1000);
 
 onMount(() => {
     function syncRoute() {
@@ -283,7 +284,7 @@ function applyHostAction(playerId: string, action: "fold" | "check" | "call" | "
             if (gs && gs.phase !== "showdown") {
                 advanceHostPhase();
             }
-        }, 1000);
+        }, PHASE_ADVANCE_DELAY_MS);
     }
 }
 
@@ -1118,27 +1119,27 @@ function nextPhase() {
                                     
                                     <div class="flex flex-wrap gap-2 justify-center">
                                         {#if canPerformAction("fold")}
-                                            <button class="py-2 px-4 bg-red-500 text-white rounded-lg font-bold" onclick={() => performAction("fold")}>
+                                            <button data-action="fold" class="py-2 px-4 bg-red-500 text-white rounded-lg font-bold" onclick={() => performAction("fold")}>
                                                 Fold
                                             </button>
                                         {/if}
                                         {#if canPerformAction("check")}
-                                            <button class="py-2 px-4 bg-gray-400 text-white rounded-lg font-bold" onclick={() => performAction("check")}>
+                                            <button data-action="check" class="py-2 px-4 bg-gray-400 text-white rounded-lg font-bold" onclick={() => performAction("check")}>
                                                 Check
                                             </button>
                                         {/if}
                                         {#if canPerformAction("call")}
-                                            <button class="py-2 px-4 bg-blue-500 text-white rounded-lg font-bold" onclick={() => performAction("call")}>
+                                            <button data-action="call" class="py-2 px-4 bg-blue-500 text-white rounded-lg font-bold" onclick={() => performAction("call")}>
                                                 Call {calculateToCall()}
                                             </button>
                                         {/if}
                                         {#if canPerformAction("raise")}
-                                            <button class="py-2 px-4 bg-purple-500 text-white rounded-lg font-bold" onclick={() => performAction("raise")}>
+                                            <button data-action="raise" class="py-2 px-4 bg-purple-500 text-white rounded-lg font-bold" onclick={() => performAction("raise")}>
                                                 Raise
                                             </button>
                                         {/if}
                                         {#if canPerformAction("allin")}
-                                            <button class="py-2 px-4 bg-yellow-500 text-white rounded-lg font-bold" onclick={() => performAction("allin")}>
+                                            <button data-action="allin" class="py-2 px-4 bg-yellow-500 text-white rounded-lg font-bold" onclick={() => performAction("allin")}>
                                                 All In
                                             </button>
                                         {/if}
@@ -1157,6 +1158,7 @@ function nextPhase() {
                                     {#if shouldShowWaitingCheck()}
                                         <button
                                             class={`min-w-44 py-3 px-5 rounded-xl font-bold transition-colors ${canQueueCheck() ? (autoCheckRequested ? "bg-emerald-500 hover:bg-emerald-400 text-white shadow-md" : "bg-white/90 hover:bg-white text-emerald-950 shadow-md") : "bg-white/10 text-white/45 shadow-none"}`}
+                                            data-queue-check
                                             disabled={!canQueueCheck()}
                                             onclick={toggleAutoCheck}
                                         >
