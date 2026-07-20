@@ -16,11 +16,11 @@ import {
     startNewHand,
 } from "./gameLogic";
 import {
-    clearGameSnapshot as clearGameState,
+    clearGame as clearGameState,
     clearSession,
-    loadGameSnapshot as loadGameState,
+    loadGame as loadGameState,
     loadSession,
-    saveGameSnapshot as saveGameState,
+    saveGame as saveGameState,
     saveSession,
 } from "./persistence";
 import type { GameConfig, GameState } from "./types";
@@ -100,14 +100,29 @@ describe("session and game persistence", () => {
         expect(loadSession()).toBeNull();
     });
 
-    it("saves and loads game state", () => {
-        const snapshot = {
+    it("saves and loads game history", () => {
+        const savedGame = {
+            config: {
+                game: config,
+                hostPlayerName: "Host",
+                hostPeerId: "host",
+            },
             epoch: "authority-test",
             revision: 3,
-            state: createState(3),
+            history: [
+                {
+                    type: "command-executed" as const,
+                    command: {
+                        type: "add-player" as const,
+                        playerId: "guest",
+                        playerName: "Guest",
+                    },
+                    context: { actorId: "host", trusted: true },
+                },
+            ],
         };
-        saveGameState(snapshot);
-        expect(loadGameState()).toEqual(snapshot);
+        saveGameState(savedGame);
+        expect(loadGameState()).toEqual(savedGame);
 
         clearGameState();
         expect(loadGameState()).toBeNull();

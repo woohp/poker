@@ -1,7 +1,13 @@
-import type { GameSnapshot } from "./types";
-
+import type { PokerEvent, PokerGameConfig } from "./pokerGame";
 const GAME_STORAGE_KEY = "poker_game_state";
 const SESSION_STORAGE_KEY = "poker_session";
+
+export interface SavedGame {
+    config: PokerGameConfig;
+    epoch: string;
+    revision: number;
+    history: readonly PokerEvent[];
+}
 
 export interface SessionData {
     isHost: boolean;
@@ -31,24 +37,24 @@ export function clearSession(): void {
     localStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
-export function saveGameSnapshot(snapshot: GameSnapshot): void {
+export function saveGame(savedGame: SavedGame): void {
     try {
-        localStorage.setItem(GAME_STORAGE_KEY, JSON.stringify(snapshot));
+        localStorage.setItem(GAME_STORAGE_KEY, JSON.stringify(savedGame));
     } catch (error) {
         console.error("Failed to save game state:", error);
     }
 }
 
-export function loadGameSnapshot(): GameSnapshot | null {
+export function loadGame(): SavedGame | null {
     try {
         const saved = localStorage.getItem(GAME_STORAGE_KEY);
-        return saved ? (JSON.parse(saved) as GameSnapshot) : null;
+        return saved ? (JSON.parse(saved) as SavedGame) : null;
     } catch (error) {
         console.error("Failed to load game state:", error);
         return null;
     }
 }
 
-export function clearGameSnapshot(): void {
+export function clearGame(): void {
     localStorage.removeItem(GAME_STORAGE_KEY);
 }

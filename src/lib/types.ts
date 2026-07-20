@@ -89,6 +89,7 @@ export type CommandRejectionReason =
     | "invalid-action"
     | "stale-authority"
     | "stale-state"
+    | "unauthorized"
     | "wrong-hand"
     | "wrong-player";
 

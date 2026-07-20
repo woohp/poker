@@ -1,12 +1,10 @@
-export interface GameExecutionResult<Reason extends string> {
-    accepted: boolean;
-    reason?: Reason;
-}
+export type GameExecutionResult<Event, Reason extends string> =
+    | { accepted: true; events: readonly Event[] }
+    | { accepted: false; reason: Reason };
 
-export interface Game<State, Command, Context, Reason extends string> {
+export interface Game<State, Command, Event, Context, Reason extends string> {
     snapshot(): State;
-    execute(command: Command, context: Context): GameExecutionResult<Reason>;
-    restore(state: State): void;
+    execute(command: Command, context: Context): GameExecutionResult<Event, Reason>;
 }
 
 export interface GameSnapshot<State> {
@@ -22,39 +20,35 @@ export interface GameCommand<Command> {
     payload: Command;
 }
 
-export interface GameCommandResult<State, Reason extends string> {
+export interface GameCommandResult<State, Event, Reason extends string> {
     commandId: string;
     accepted: boolean;
     revision: number;
     reason?: Reason | "stale-authority" | "stale-state";
+    events: readonly Event[];
     snapshot: GameSnapshot<State>;
     duplicate: boolean;
 }
 
-export interface GameHistoryEntry<State, Command> {
-    revision: number;
-    command: GameCommand<Command> | null;
-    before: State;
-    after: State;
-}
-
-export interface GameEngineOptions {
+export interface GameEngineOptions<Event> {
     epoch?: string;
     revision?: number;
+    history?: readonly Event[];
 }
 
-export class GameEngine<State, Command, Context, Reason extends string> {
+export class GameEngine<State, Command, Event, Context, Reason extends string> {
     private epoch: string;
     private revision: number;
-    private results = new Map<string, GameCommandResult<State, Reason>>();
-    private entries: Array<GameHistoryEntry<State, Command>> = [];
+    private results = new Map<string, GameCommandResult<State, Event, Reason>>();
+    private events: Event[];
 
     constructor(
-        private readonly game: Game<State, Command, Context, Reason>,
-        options: GameEngineOptions = {},
+        private readonly game: Game<State, Command, Event, Context, Reason>,
+        options: GameEngineOptions<Event> = {},
     ) {
         this.epoch = options.epoch ?? crypto.randomUUID();
-        this.revision = options.revision ?? 0;
+        this.events = [...structuredClone(options.history ?? [])];
+        this.revision = options.revision ?? this.events.length;
     }
 
     snapshot(): GameSnapshot<State> {
@@ -65,11 +59,14 @@ export class GameEngine<State, Command, Context, Reason extends string> {
         };
     }
 
-    history(): readonly GameHistoryEntry<State, Command>[] {
-        return structuredClone(this.entries);
+    history(): readonly Event[] {
+        return structuredClone(this.events);
     }
 
-    dispatch(command: GameCommand<Command>, context: Context): GameCommandResult<State, Reason> {
+    dispatch(
+        command: GameCommand<Command>,
+        context: Context,
+    ): GameCommandResult<State, Event, Reason> {
         const cached = this.results.get(command.id);
         if (cached) return { ...structuredClone(cached), duplicate: true };
 
@@ -80,53 +77,41 @@ export class GameEngine<State, Command, Context, Reason extends string> {
             return this.reject(command.id, "stale-state");
         }
 
-        const before = this.game.snapshot();
         const execution = this.game.execute(command.payload, context);
         if (!execution.accepted) {
-            return this.reject(command.id, execution.reason as Reason);
+            return this.reject(command.id, execution.reason);
         }
 
         this.revision += 1;
-        const after = this.game.snapshot();
-        this.entries.push({
-            revision: this.revision,
-            command: structuredClone(command),
-            before,
-            after,
-        });
+        this.events.push(...structuredClone(execution.events));
         return this.cache({
             commandId: command.id,
             accepted: true,
             revision: this.revision,
+            events: structuredClone(execution.events),
             snapshot: this.snapshot(),
             duplicate: false,
         });
-    }
-
-    commit(state: State): GameSnapshot<State> {
-        const before = this.game.snapshot();
-        this.game.restore(state);
-        this.revision += 1;
-        const after = this.game.snapshot();
-        this.entries.push({ revision: this.revision, command: null, before, after });
-        return this.snapshot();
     }
 
     private reject(
         commandId: string,
         reason: Reason | "stale-authority" | "stale-state",
-    ): GameCommandResult<State, Reason> {
+    ): GameCommandResult<State, Event, Reason> {
         return this.cache({
             commandId,
             accepted: false,
             revision: this.revision,
             reason,
+            events: [],
             snapshot: this.snapshot(),
             duplicate: false,
         });
     }
 
-    private cache(result: GameCommandResult<State, Reason>): GameCommandResult<State, Reason> {
+    private cache(
+        result: GameCommandResult<State, Event, Reason>,
+    ): GameCommandResult<State, Event, Reason> {
         this.results.set(result.commandId, structuredClone(result));
         return result;
     }

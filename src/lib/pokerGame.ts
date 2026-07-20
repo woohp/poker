@@ -1,30 +1,69 @@
 import type { Game, GameExecutionResult } from "./gameEngine";
-import { processAction } from "./gameLogic";
-import type { GameState, PlayerAction } from "./types";
+import {
+    addPlayer,
+    advancePhase,
+    applyPotWinners,
+    createInitialGameState,
+    processAction,
+    removePlayer,
+    startNewHand,
+} from "./gameLogic";
+import type { Card, GameConfig, GameState, PlayerAction, RevealedHand } from "./types";
 
-export interface PokerCommand {
-    playerId: string;
-    round: number;
-    action: PlayerAction;
-    amount?: number;
+export interface PokerGameConfig {
+    game: GameConfig;
+    hostPlayerName: string;
+    hostPeerId: string;
 }
+
+export type PokerCommand =
+    | {
+          type: "player-action";
+          playerId: string;
+          round: number;
+          action: PlayerAction;
+          amount?: number;
+      }
+    | { type: "add-player"; playerId: string; playerName: string }
+    | { type: "remove-player"; playerId: string }
+    | { type: "start-hand" }
+    | {
+          type: "advance-phase";
+          cards: Card[];
+          winnersByPot?: string[][];
+          revealedHands?: RevealedHand[];
+      }
+    | { type: "record-outcome"; winnersByPot: string[][] };
 
 export interface PokerCommandContext {
     actorId: string;
+    trusted?: boolean;
 }
 
-export type PokerRejectionReason = "invalid-action" | "wrong-hand" | "wrong-player";
+export interface PokerEvent {
+    type: "command-executed";
+    command: PokerCommand;
+    context: PokerCommandContext;
+}
+
+export type PokerRejectionReason =
+    | "invalid-action"
+    | "unauthorized"
+    | "wrong-hand"
+    | "wrong-player";
 
 export class PokerGame implements Game<
     GameState,
     PokerCommand,
+    PokerEvent,
     PokerCommandContext,
     PokerRejectionReason
 > {
     private state: GameState;
 
-    constructor(initialState: GameState) {
-        this.state = cloneState(initialState);
+    constructor(config: PokerGameConfig, events: readonly PokerEvent[] = []) {
+        this.state = createInitialGameState(config.game, config.hostPlayerName, config.hostPeerId);
+        for (const event of events) this.state = evolvePokerState(this.state, event);
     }
 
     snapshot(): GameState {
@@ -34,37 +73,100 @@ export class PokerGame implements Game<
     execute(
         command: PokerCommand,
         context: PokerCommandContext,
-    ): GameExecutionResult<PokerRejectionReason> {
-        const transition = reducePokerState(this.state, command, context);
-        if (transition.accepted) this.state = transition.state;
-        return transition;
-    }
-
-    restore(state: GameState): void {
-        this.state = cloneState(state);
+    ): GameExecutionResult<PokerEvent, PokerRejectionReason> {
+        const decision = decidePokerCommand(this.state, command, context);
+        if (!decision.accepted) return decision;
+        for (const event of decision.events) {
+            this.state = evolvePokerState(this.state, event);
+        }
+        return decision;
     }
 }
 
+export type PokerDecision = GameExecutionResult<PokerEvent, PokerRejectionReason>;
 export type PokerTransition =
     | { accepted: true; state: GameState }
     | { accepted: false; reason: PokerRejectionReason };
 
-export function reducePokerState(
+export function decidePokerCommand(
+    state: GameState,
+    command: PokerCommand,
+    context: PokerCommandContext,
+): PokerDecision {
+    const transition = transitionPokerState(state, command, context);
+    if (!transition.accepted) return transition;
+    return {
+        accepted: true,
+        events: [{ type: "command-executed", command, context }],
+    };
+}
+
+export function evolvePokerState(state: GameState, event: PokerEvent): GameState {
+    const transition = transitionPokerState(state, event.command, event.context);
+    if (!transition.accepted) {
+        throw new Error(`Invalid poker history: ${transition.reason}`);
+    }
+    return transition.state;
+}
+
+function transitionPokerState(
     state: GameState,
     command: PokerCommand,
     context: PokerCommandContext,
 ): PokerTransition {
-    if (command.playerId !== context.actorId) {
-        return { accepted: false, reason: "wrong-player" };
-    }
-    if (command.round !== state.round) {
-        return { accepted: false, reason: "wrong-hand" };
+    const nextState = cloneState(state);
+
+    switch (command.type) {
+        case "player-action":
+            if (command.playerId !== context.actorId) {
+                return { accepted: false, reason: "wrong-player" };
+            }
+            if (command.round !== state.round) {
+                return { accepted: false, reason: "wrong-hand" };
+            }
+            if (!processAction(nextState, command.playerId, command.action, command.amount)) {
+                return { accepted: false, reason: "invalid-action" };
+            }
+            break;
+
+        case "add-player":
+            if (!context.trusted) return { accepted: false, reason: "unauthorized" };
+            if (!addPlayer(nextState, command.playerName, command.playerId)) {
+                return { accepted: false, reason: "invalid-action" };
+            }
+            break;
+
+        case "remove-player":
+            if (!context.trusted) return { accepted: false, reason: "unauthorized" };
+            removePlayer(nextState, command.playerId);
+            break;
+
+        case "start-hand":
+            if (!context.trusted) return { accepted: false, reason: "unauthorized" };
+            startNewHand(nextState);
+            if (nextState.phase === "waiting") {
+                return { accepted: false, reason: "invalid-action" };
+            }
+            break;
+
+        case "advance-phase":
+            if (!context.trusted) return { accepted: false, reason: "unauthorized" };
+            advancePhase(nextState);
+            nextState.communityCards.push(...command.cards);
+            if (command.revealedHands) nextState.revealedHands = command.revealedHands;
+            if (command.winnersByPot && !applyPotWinners(nextState, command.winnersByPot)) {
+                return { accepted: false, reason: "invalid-action" };
+            }
+            break;
+
+        case "record-outcome":
+            if (!context.trusted) return { accepted: false, reason: "unauthorized" };
+            if (!applyPotWinners(nextState, command.winnersByPot)) {
+                return { accepted: false, reason: "invalid-action" };
+            }
+            break;
     }
 
-    const nextState = cloneState(state);
-    if (!processAction(nextState, command.playerId, command.action, command.amount)) {
-        return { accepted: false, reason: "invalid-action" };
-    }
     return { accepted: true, state: nextState };
 }
 

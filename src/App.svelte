@@ -3,19 +3,13 @@ import QRCode from "qrcode";
 import { onDestroy, onMount } from "svelte";
 import { GameEngine } from "./lib/gameEngine";
 import {
-    addPlayer,
-    advancePhase,
-    applyPotWinners,
     calculatePotAllocations,
-    createInitialGameState,
     getValidActions,
     isBettingRoundComplete,
-    removePlayer,
-    startNewHand,
 } from "./lib/gameLogic";
 import { getStablePeerId, loadStablePeerId, resetStablePeerId } from "./lib/peerIdentity";
 import { PeerManager } from "./lib/peerManager";
-import { PokerGame } from "./lib/pokerGame";
+import { PokerGame, type PokerCommand, type PokerGameConfig } from "./lib/pokerGame";
 import {
     toCommandResultMessage,
     toEngineCommand,
@@ -23,11 +17,13 @@ import {
     type PokerEngineResult,
 } from "./lib/pokerProtocol";
 import {
+    clearGame,
     clearSession,
-    loadGameSnapshot,
+    loadGame,
     loadSession,
-    saveGameSnapshot,
+    saveGame,
     saveSession,
+    type SavedGame,
 } from "./lib/persistence";
 import { compareHands, createShuffledDeck, evaluateHand, formatCard } from "./lib/poker";
 import { navigate, parseRoute, type Route } from "./lib/router";
@@ -42,6 +38,7 @@ import type {
     PeerMessage,
     Player,
     PlayerAction,
+    RevealedHand,
 } from "./lib/types";
 
 let route: Route = $state({ name: "home" });
@@ -49,6 +46,7 @@ let isLoading = $state(false);
 let isConnectedToGame = $state(false);
 let peerManager: PeerManager | null = $state(null);
 let gameEngine: PokerEngine | null = null;
+let pokerGameConfig: PokerGameConfig | null = null;
 let gameSnapshot: GameSnapshot | null = $state(null);
 let gameState: GameState | null = $state(null);
 let playerName = $state("");
@@ -99,7 +97,7 @@ onMount(() => {
     window.addEventListener("popstate", syncRoute);
     window.addEventListener("pagehide", announceDeparture);
 
-    const saved = loadGameSnapshot();
+    const saved = loadGame();
     const session = loadSession();
     const savedPeerId = loadStablePeerId();
 
@@ -112,13 +110,23 @@ onMount(() => {
     }
 
     if (route.name === "room") {
-        if (saved && session && savedPeerId && route.roomCode === session.roomCode) {
-            setGameSnapshot(saved);
+        if (
+            session &&
+            savedPeerId &&
+            route.roomCode === session.roomCode &&
+            (!session.isHost || saved)
+        ) {
             playerName = session.playerName;
             localPlayerId = savedPeerId;
             roomCode = session.roomCode;
             isHost = session.isHost;
-            void restoreSession(session.roomCode, session.playerName, savedPeerId, session.isHost, saved);
+            void restoreSession(
+                session.roomCode,
+                session.playerName,
+                savedPeerId,
+                session.isHost,
+                saved,
+            );
         } else {
             joinCode = route.roomCode;
             navigate({ name: "join", roomCode: route.roomCode }, true);
@@ -197,14 +205,47 @@ function disconnectPeerManager() {
 function setGameSnapshot(snapshot: GameSnapshot) {
     gameSnapshot = snapshot;
     gameState = snapshot.state;
+    if (import.meta.env.DEV) {
+        (window as Window & { __pokerGameState?: GameState }).__pokerGameState = snapshot.state;
+    }
 }
 
-function publishState(state: GameState, incrementRevision = true) {
+function publishCurrentState() {
     if (!gameEngine) return;
-    const snapshot = incrementRevision ? gameEngine.commit(state) : gameEngine.snapshot();
+    const snapshot = gameEngine.snapshot();
     setGameSnapshot(snapshot);
     peerManager?.broadcastState(snapshot);
-    saveGameSnapshot(snapshot);
+    persistHistory();
+}
+
+function dispatchTrustedCommand(command: PokerCommand): PokerEngineResult | null {
+    if (!gameEngine || !localPlayerId) return null;
+    const snapshot = gameEngine.snapshot();
+    const result = gameEngine.dispatch(
+        {
+            id: crypto.randomUUID(),
+            epoch: snapshot.epoch,
+            expectedRevision: snapshot.revision,
+            payload: command,
+        },
+        { actorId: localPlayerId, trusted: true },
+    );
+    if (result.accepted) {
+        setGameSnapshot(result.snapshot);
+        publishCurrentState();
+    }
+    return result;
+}
+
+function persistHistory() {
+    if (!isHost || !gameEngine || !pokerGameConfig) return;
+    const snapshot = gameEngine.snapshot();
+    saveGame({
+        config: pokerGameConfig,
+        epoch: snapshot.epoch,
+        revision: snapshot.revision,
+        history: gameEngine.history(),
+    });
 }
 
 async function restoreSession(
@@ -212,21 +253,28 @@ async function restoreSession(
     savedPlayerName: string,
     savedPeerId: string,
     savedIsHost: boolean,
-    savedSnapshot: GameSnapshot,
+    savedGame: SavedGame | null,
 ) {
     disconnectPeerManager();
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
 
     try {
         if (savedIsHost) {
-            gameEngine = new GameEngine(new PokerGame(savedSnapshot.state), {
-                epoch: savedSnapshot.epoch,
-                revision: savedSnapshot.revision,
-            });
-            restoreDealerState(savedSnapshot.state.round);
+            if (!savedGame) throw new Error("Missing host game history");
+            pokerGameConfig = savedGame.config;
+            gameEngine = new GameEngine(
+                new PokerGame(savedGame.config, savedGame.history),
+                {
+                    epoch: savedGame.epoch,
+                    revision: savedGame.revision,
+                    history: savedGame.history,
+                },
+            );
+            setGameSnapshot(gameEngine.snapshot());
+            restoreDealerState(gameEngine.snapshot().state.round);
             await peerManager.createHost(savedPeerId, savedRoomCode);
             isConnectedToGame = true;
-            publishState(savedSnapshot.state);
+            publishCurrentState();
             setTimeout(() => generateQRCode(savedRoomCode), 100);
         } else {
             await peerManager.joinGame(savedRoomCode, savedPlayerName, savedPeerId);
@@ -292,16 +340,19 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
                 return;
             }
 
-            const player = addPlayer(gameState, message.playerName, message.peerId);
-            if (player) {
+            const result = dispatchTrustedCommand({
+                type: "add-player",
+                playerId: message.peerId,
+                playerName: message.playerName,
+            });
+            if (result?.accepted) {
                 peerManager?.sendToPeer(fromPeerId, {
                     type: "joinResponse",
                     requestId: message.requestId,
                     accepted: true,
-                    playerId: player.id,
-                    snapshot: { ...gameSnapshot, state: gameState },
+                    playerId: message.peerId,
+                    snapshot: result.snapshot,
                 });
-                publishState(gameState);
             } else {
                 peerManager?.sendToPeer(fromPeerId, {
                     type: "joinResponse",
@@ -346,7 +397,13 @@ function applyHostAction(
             id: crypto.randomUUID(),
             epoch: snapshot.epoch,
             expectedRevision: snapshot.revision,
-            payload: { playerId, round: snapshot.state.round, action, amount },
+            payload: {
+                type: "player-action",
+                playerId,
+                round: snapshot.state.round,
+                action,
+                amount,
+            },
         },
         { actorId: playerId },
     );
@@ -358,7 +415,7 @@ function applyHostAction(
 
 function commitProcessedCommand(processed: PokerEngineResult) {
     setGameSnapshot(processed.snapshot);
-    publishState(processed.snapshot.state, false);
+    publishCurrentState();
 
     if (isBettingRoundComplete(processed.snapshot.state)) {
         setTimeout(() => {
@@ -437,7 +494,6 @@ function applyIncomingSnapshot(snapshot: GameSnapshot): boolean {
         pendingCommand = null;
         commandFeedback = "";
     }
-    saveGameSnapshot(snapshot);
     if (localHoleRound !== snapshot.state.round) localHoleCards = [];
     if (
         snapshot.state.config.mode === "digital" &&
@@ -455,7 +511,7 @@ function handleConnectionChange(peerId: string, connected: boolean) {
     if (connected) {
         isConnectedToGame = true;
         if (isHost) {
-            publishState(gameState);
+            publishCurrentState();
         } else if (gameState.config.mode === "digital") {
             requestHoleCards();
         }
@@ -470,8 +526,7 @@ function handleConnectionChange(peerId: string, connected: boolean) {
     }
     if (gameState.phase !== "waiting") return;
 
-    removePlayer(gameState, peerId);
-    publishState(gameState);
+    dispatchTrustedCommand({ type: "remove-player", playerId: peerId });
 }
 
 async function createGame() {
@@ -493,10 +548,10 @@ async function createGame() {
         roomCode = peerManager.getRoomCode();
 
         const config: GameConfig = { mode: gameMode, startingChips, smallBlind, bigBlind, ante };
-        const initialState = createInitialGameState(config, playerName, peerId);
-        gameEngine = new GameEngine(new PokerGame(initialState));
+        pokerGameConfig = { game: config, hostPlayerName: playerName, hostPeerId: peerId };
+        gameEngine = new GameEngine(new PokerGame(pokerGameConfig));
         setGameSnapshot(gameEngine.snapshot());
-        publishState(initialState);
+        publishCurrentState();
         saveSession({ isHost: true, roomCode, playerName });
         isLoading = false;
         navigate({ name: "room", roomCode });
@@ -566,22 +621,20 @@ function startGame() {
 }
 
 function startHand() {
-    if (!gameState) return;
-    startNewHand(gameState);
+    const result = dispatchTrustedCommand({ type: "start-hand" });
+    if (!result?.accepted) return;
+
     localHoleCards = [];
     localHoleRound = 0;
+    if (gameState?.config.mode !== "digital" || gameState.phase !== "preflop") return;
 
-    if (gameState.config.mode === "digital" && gameState.phase === "preflop") {
-        hostDeck = createShuffledDeck();
-        hostHoleCards = new Map();
-        for (const player of gameState.players.filter((entry) => entry.isActive)) {
-            hostHoleCards.set(player.id, [hostDeck.pop()!, hostDeck.pop()!]);
-        }
-        for (const playerId of hostHoleCards.keys()) sendHoleCards(playerId);
-        saveDealerState();
+    hostDeck = createShuffledDeck();
+    hostHoleCards = new Map();
+    for (const player of gameState.players.filter((entry) => entry.isActive)) {
+        hostHoleCards.set(player.id, [hostDeck.pop()!, hostDeck.pop()!]);
     }
-
-    publishState(gameState);
+    for (const playerId of hostHoleCards.keys()) sendHoleCards(playerId);
+    saveDealerState();
 }
 
 function saveDealerState() {
@@ -648,18 +701,34 @@ function sendHoleCards(playerId: string) {
 function advanceHostPhase() {
     if (!gameState) return;
     const previousPhase = gameState.phase;
-    advancePhase(gameState);
+    const cards: Card[] = [];
+    let showdown: { winnersByPot: string[][]; revealedHands: RevealedHand[] } | undefined;
+
     if (gameState.config.mode === "digital") {
-        const drawCount = previousPhase === "preflop" ? 3 : previousPhase === "flop" || previousPhase === "turn" ? 1 : 0;
-        for (let index = 0; index < drawCount; index++) gameState.communityCards.push(hostDeck.pop()!);
-        saveDealerState();
-        if (gameState.phase === "showdown") settleDigitalShowdown();
+        const drawCount =
+            previousPhase === "preflop"
+                ? 3
+                : previousPhase === "flop" || previousPhase === "turn"
+                  ? 1
+                  : 0;
+        for (let index = 0; index < drawCount; index++) cards.push(hostDeck.pop()!);
+        if (previousPhase === "river") showdown = calculateDigitalShowdown();
     }
-    publishState(gameState);
+
+    const result = dispatchTrustedCommand({
+        type: "advance-phase",
+        cards,
+        winnersByPot: showdown?.winnersByPot,
+        revealedHands: showdown?.revealedHands,
+    });
+    if (result?.accepted && gameState?.config.mode === "digital") saveDealerState();
 }
 
-function settleDigitalShowdown() {
-    if (!gameState || gameState.pot === 0) return;
+function calculateDigitalShowdown(): {
+    winnersByPot: string[][];
+    revealedHands: RevealedHand[];
+} {
+    if (!gameState || gameState.pot === 0) return { winnersByPot: [], revealedHands: [] };
     const pots = calculatePotAllocations(gameState);
     const winnersByPot = pots.map((pot) => {
         const eligible = pot.eligiblePlayerIds.filter((id) => hostHoleCards.has(id));
@@ -678,7 +747,7 @@ function settleDigitalShowdown() {
         return winners;
     });
     const revealedIds = new Set(winnersByPot.flat());
-    gameState.revealedHands = [...revealedIds].map((playerId) => {
+    const revealedHands = [...revealedIds].map((playerId) => {
         const cards = hostHoleCards.get(playerId)!;
         return {
             playerId,
@@ -686,7 +755,7 @@ function settleDigitalShowdown() {
             handName: evaluateHand([...cards, ...gameState!.communityCards]).name,
         };
     });
-    applyPotWinners(gameState, winnersByPot);
+    return { winnersByPot, revealedHands };
 }
 
 function performAction(action: PlayerAction) {
@@ -845,13 +914,13 @@ function recordOutcome() {
     }
 
     const winnersByPot = getPotAllocations().map((_, index) => showdownSelections[index] || []);
-    if (!applyPotWinners(gameState, winnersByPot)) {
+    const result = dispatchTrustedCommand({ type: "record-outcome", winnersByPot });
+    if (!result?.accepted) {
         errorMessage = "Select at least one eligible winner for each pot.";
         return;
     }
 
     errorMessage = "";
-    publishState(gameState);
 }
 
 async function copyJoinCode() {
@@ -876,6 +945,7 @@ async function leaveGame() {
     joinCode = "";
     isLoading = false;
     navigate({ name: "home" });
+    clearGame();
     clearSession();
 }
 

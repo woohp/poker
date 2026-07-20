@@ -283,9 +283,13 @@ async function readStateWithTimeout(page: Page, playerIndex: number): Promise<St
 
 async function readState(page: Page): Promise<StoredState> {
     return page.evaluate(() => {
-        const raw = localStorage.getItem("poker_game_state");
-        if (!raw) throw new Error("No saved game state");
-        return (JSON.parse(raw) as { state: StoredState }).state;
+        const state = (
+            window as Window & {
+                __pokerGameState?: StoredState;
+            }
+        ).__pokerGameState;
+        if (!state) throw new Error("No game state available");
+        return state;
     });
 }
 
