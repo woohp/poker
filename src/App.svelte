@@ -183,6 +183,12 @@ function disconnectPeerManager() {
     isConnectedToGame = false;
 }
 
+function publishState(state: GameState, incrementRevision = true) {
+    if (incrementRevision) state.revision += 1;
+    peerManager?.broadcastState(state);
+    saveGameState(state);
+}
+
 async function restoreSession(
     savedRoomCode: string,
     savedPlayerName: string,
@@ -198,7 +204,7 @@ async function restoreSession(
             restoreDealerState(savedState.round);
             await peerManager.createHost(savedPeerId, savedRoomCode);
             isConnectedToGame = true;
-            peerManager.broadcastState(savedState);
+            publishState(savedState);
             setTimeout(() => generateQRCode(savedRoomCode), 100);
         } else {
             await peerManager.joinGame(savedRoomCode, savedPlayerName, savedPeerId);
@@ -273,8 +279,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
                     playerId: player.id,
                     state: gameState,
                 });
-                peerManager?.broadcastState(gameState);
-                saveGameState(gameState);
+                publishState(gameState);
             } else {
                 peerManager?.sendToPeer(fromPeerId, {
                     type: "joinResponse",
@@ -315,6 +320,7 @@ function applyHostAction(
         {
             type: "action",
             commandId: crypto.randomUUID(),
+            authorityEpoch: gameState.authorityEpoch,
             playerId,
             round: gameState.round,
             expectedRevision: gameState.revision,
@@ -331,8 +337,7 @@ function applyHostAction(
 
 function commitProcessedCommand(processed: ProcessedCommand) {
     gameState = processed.state;
-    peerManager?.broadcastState(gameState);
-    saveGameState(gameState);
+    publishState(gameState, false);
 
     if (isBettingRoundComplete(gameState)) {
         setTimeout(() => {
@@ -429,7 +434,7 @@ function handleConnectionChange(peerId: string, connected: boolean) {
     if (connected) {
         isConnectedToGame = true;
         if (isHost) {
-            peerManager?.broadcastState(gameState);
+            publishState(gameState);
         } else if (gameState.config.mode === "digital") {
             requestHoleCards();
         }
@@ -445,8 +450,7 @@ function handleConnectionChange(peerId: string, connected: boolean) {
     if (gameState.phase !== "waiting") return;
 
     removePlayer(gameState, peerId);
-    peerManager?.broadcastState(gameState);
-    saveGameState(gameState);
+    publishState(gameState);
 }
 
 async function createGame() {
@@ -470,8 +474,7 @@ async function createGame() {
 
         const config: GameConfig = { mode: gameMode, startingChips, smallBlind, bigBlind, ante };
         gameState = createInitialGameState(config, playerName, peerId);
-        peerManager.broadcastState(gameState);
-        saveGameState(gameState);
+        publishState(gameState);
         saveSession({ isHost: true, roomCode, playerName });
         isLoading = false;
         navigate({ name: "room", roomCode });
@@ -556,8 +559,7 @@ function startHand() {
         saveDealerState();
     }
 
-    peerManager?.broadcastState(gameState);
-    saveGameState(gameState);
+    publishState(gameState);
 }
 
 function saveDealerState() {
@@ -631,8 +633,7 @@ function advanceHostPhase() {
         saveDealerState();
         if (gameState.phase === "showdown") settleDigitalShowdown();
     }
-    peerManager?.broadcastState(gameState);
-    saveGameState(gameState);
+    publishState(gameState);
 }
 
 function settleDigitalShowdown() {
@@ -683,6 +684,7 @@ function performAction(action: PlayerAction) {
         const message: ActionMessage = {
             type: "action",
             commandId: crypto.randomUUID(),
+            authorityEpoch: gameState.authorityEpoch,
             playerId: localPlayerId,
             round: gameState.round,
             expectedRevision: gameState.revision,
@@ -716,6 +718,8 @@ function describeCommandRejection(reason: string | undefined): string {
             return "The host rejected an action for another player.";
         case "wrong-hand":
             return "The hand advanced before this action arrived.";
+        case "stale-authority":
+            return "The host changed before this action arrived.";
         case "stale-state":
             return "The turn changed before this action arrived.";
         default:
@@ -825,8 +829,7 @@ function recordOutcome() {
     }
 
     errorMessage = "";
-    peerManager?.broadcastState(gameState);
-    saveGameState(gameState);
+    publishState(gameState);
 }
 
 async function copyJoinCode() {

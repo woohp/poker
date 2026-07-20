@@ -110,6 +110,7 @@ function parseLastMessage(doc: Y.Doc): unknown {
 
 function sampleState(): GameState {
     return {
+        authorityEpoch: "authority-test",
         revision: 0,
         players: [],
         phase: "waiting",
@@ -229,7 +230,7 @@ describe("PeerManager", () => {
 
         peerManager.broadcastState(state);
 
-        expect(state.revision).toBe(1);
+        expect(state.revision).toBe(0);
         expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(state));
         expect(provider.sentDirectMessages).toHaveLength(0);
     });
@@ -315,6 +316,7 @@ describe("PeerManager", () => {
                 message: {
                     type: "action",
                     commandId: "command-earlier",
+                    authorityEpoch: "authority-test",
                     playerId: "guest-earlier",
                     round: 1,
                     expectedRevision: 1,
@@ -328,6 +330,7 @@ describe("PeerManager", () => {
             {
                 type: "action",
                 commandId: "command-earlier",
+                authorityEpoch: "authority-test",
                 playerId: "guest-earlier",
                 round: 1,
                 expectedRevision: 1,

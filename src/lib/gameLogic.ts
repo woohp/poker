@@ -44,6 +44,7 @@ export function createInitialGameState(
     hostPeerId: string,
 ): GameState {
     return {
+        authorityEpoch: crypto.randomUUID(),
         revision: 0,
         players: [createPlayer(hostPeerId, hostPlayerName, config.startingChips, true)],
         phase: "waiting",
@@ -72,6 +73,7 @@ export function loadGameState(): GameState | null {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
             const state = JSON.parse(saved) as GameState;
+            state.authorityEpoch ??= "legacy";
             state.revision ??= 0;
             return state;
         }

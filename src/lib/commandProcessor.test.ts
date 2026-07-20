@@ -26,6 +26,7 @@ function createCommand(state: GameState, overrides: Partial<ActionMessage> = {})
     return {
         type: "action",
         commandId: "command-1",
+        authorityEpoch: state.authorityEpoch,
         playerId: currentPlayer.id,
         round: state.round,
         expectedRevision: state.revision,
@@ -73,6 +74,7 @@ describe("GameCommandProcessor", () => {
         ["wrong-player", { playerId: "other" }],
         ["wrong-hand", { round: 99 }],
         ["stale-state", { expectedRevision: 6 }],
+        ["stale-authority", { authorityEpoch: "old-authority" }],
     ] as const)("rejects %s commands with the authoritative state", (reason, overrides) => {
         const processor = new GameCommandProcessor();
         const state = createState();
@@ -87,6 +89,6 @@ describe("GameCommandProcessor", () => {
             revision: state.revision,
             state,
         });
-        expect(processed.state).toBe(state);
+        expect(processed.state).toEqual(state);
     });
 });

@@ -252,7 +252,6 @@ export class PeerManager {
     }
 
     broadcastState(state: GameState): void {
-        state.revision += 1;
         this.stateMap?.set("game", JSON.stringify(state));
     }
 
