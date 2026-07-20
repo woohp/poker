@@ -133,6 +133,20 @@ describe("PokerGame", () => {
         expect(restored.snapshot()).toEqual(original.snapshot());
     });
 
+    it("rejects unknown command and event discriminants", () => {
+        const game = new PokerGame(config);
+        const unknownCommand = { type: "unknown" } as unknown as PokerCommand;
+        const unknownEvent = { type: "unknown" } as unknown as PokerEvent;
+
+        expect(game.decide(unknownCommand, { actorId: "host", trusted: true })).toEqual({
+            accepted: false,
+            reason: "invalid-action",
+        });
+        expect(() => game.apply([unknownEvent])).toThrow(
+            "Invalid poker history: unknown event type",
+        );
+    });
+
     it("applies an event batch atomically", () => {
         const game = new PokerGame(config);
         const before = game.snapshot();

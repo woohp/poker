@@ -104,6 +104,9 @@ export function decidePokerCommand(
 }
 
 export function evolvePokerState(state: GameState, event: PokerEvent): GameState {
+    if (event.type !== "command-executed") {
+        throw new Error("Invalid poker history: unknown event type");
+    }
     const transition = transitionPokerState(state, event.command, event.context);
     if (!transition.accepted) {
         throw new Error(`Invalid poker history: ${transition.reason}`);
@@ -189,9 +192,16 @@ function transitionPokerState(
                 return { accepted: false, reason: "invalid-action" };
             }
             break;
+
+        default:
+            return rejectUnknownCommand(command);
     }
 
     return { accepted: true, state: nextState };
+}
+
+function rejectUnknownCommand(_command: never): PokerTransition {
+    return { accepted: false, reason: "invalid-action" };
 }
 
 function isValidPhaseAdvance(
