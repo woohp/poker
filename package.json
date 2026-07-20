@@ -7,7 +7,7 @@
         "dev": "vp dev",
         "build": "vp build",
         "preview": "vp preview",
-        "check": "vp check && svelte-check-native --tsconfig ./tsconfig.app.json && tsgo --noEmit -p tsconfig.node.json",
+        "check": "vp check && svelte-check-native --tsconfig ./tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
         "lint": "vp lint",
         "format": "vp fmt --write",
         "test": "vp test run",
@@ -18,7 +18,7 @@
         "postinstall": "patch-package"
     },
     "dependencies": {
-        "@tailwindcss/vite": "^4.1.18",
+        "@tailwindcss/vite": "^4.3.3",
         "qrcode": "^1.5.4",
         "y-webtorrent": "github:woohp/y-webtorrent",
         "yjs": "^13.6.31"
@@ -26,27 +26,25 @@
     "devDependencies": {
         "@playwright/test": "^1.61.1",
         "@sveltejs/vite-plugin-svelte": "^7.2.0",
-        "@tsconfig/svelte": "^5.0.6",
-        "@types/node": "^24.10.1",
+        "@tsconfig/svelte": "^5.0.8",
+        "@types/node": "^26.1.1",
         "@types/qrcode": "^1.5.6",
-        "@typescript/native-preview": "beta",
         "patch-package": "^8.0.1",
-        "svelte": "^5.56.4",
-        "svelte-check-native": "^0.9.6",
-        "tailwindcss": "^4.1.18",
-        "tsx": "^4.23.0",
+        "svelte": "^5.56.7",
+        "svelte-check-native": "^1.1.2",
+        "tailwindcss": "^4.3.3",
+        "tsx": "^4.23.1",
         "typescript": "^7.0.2",
-        "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.68.0",
-        "vite": "npm:@voidzero-dev/vite-plus-core@latest",
-        "vite-plus": "latest",
-        "vitest": "npm:@voidzero-dev/vite-plus-test@latest",
+        "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.69.0",
+        "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5",
+        "vite-plus": "0.2.5",
+        "vitest": "^4.1.10",
         "wt-tracker": "github:Novage/wt-tracker"
     },
     "overrides": {
-        "vite": "npm:@voidzero-dev/vite-plus-core@latest",
-        "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+        "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5"
     },
-    "packageManager": "npm@11.12.1",
+    "packageManager": "npm@12.0.1",
     "allowScripts": {
         "webrtc-data-peer@0.1.0": true,
         "y-webtorrent@0.1.0": true
