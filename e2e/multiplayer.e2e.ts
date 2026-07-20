@@ -186,6 +186,29 @@ test("digital hole cards arrive without refreshing", async ({ browser }) => {
     await hostContext.close();
 });
 
+test("digital dealer state survives a host refresh", async ({ browser }) => {
+    const { hostContext, guestContext, host, guest } = await joinGame(browser, true);
+
+    try {
+        await host.getByText("Start Game", { exact: true }).click();
+        const hostHand = host.getByText("Your hand", { exact: true }).locator("..");
+        await expect(hostHand).toBeVisible();
+        const cardsBeforeRefresh = await hostHand.textContent();
+
+        await host.reload();
+        const restoredHand = host.getByText("Your hand", { exact: true }).locator("..");
+        await expect(restoredHand).toBeVisible({ timeout: 15_000 });
+        expect(await restoredHand.textContent()).toBe(cardsBeforeRefresh);
+
+        await guest.locator('button[data-action="check"], button[data-action="call"]').click();
+        await host.locator('button[data-action="check"], button[data-action="call"]').click();
+        await expect(host.getByText("flop", { exact: true })).toBeVisible({ timeout: 10_000 });
+        await expect(guest.getByText("flop", { exact: true })).toBeVisible({ timeout: 10_000 });
+    } finally {
+        await Promise.all([hostContext.close(), guestContext.close()]);
+    }
+});
+
 test("digital hole cards arrive from a Chromium host to a Firefox guest", async () => {
     const hostBrowser = await chromium.launch();
     const guestBrowser = await firefox.launch();

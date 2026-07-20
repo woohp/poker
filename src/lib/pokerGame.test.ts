@@ -52,6 +52,16 @@ function createFoldCommand(game: PokerGame): Extract<PokerCommand, { type: "play
 }
 
 describe("PokerGame", () => {
+    it("rejects invalid configuration", () => {
+        expect(
+            () =>
+                new PokerGame({
+                    ...config,
+                    game: { ...config.game, smallBlind: 10, bigBlind: 10 },
+                }),
+        ).toThrow("Invalid poker game configuration");
+    });
+
     it("owns its state while using pure poker decisions", () => {
         const game = createStartedGame();
         const before = game.snapshot();
@@ -130,6 +140,30 @@ describe("PokerGame", () => {
 
         expect(() => game.apply(events)).toThrow("Invalid poker history");
         expect(game.snapshot()).toEqual(before);
+    });
+
+    it("enforces lifecycle and phase invariants", () => {
+        const game = createStartedGame();
+
+        expect(game.decide({ type: "start-hand" }, { actorId: "host", trusted: true })).toEqual({
+            accepted: false,
+            reason: "invalid-action",
+        });
+        expect(
+            game.decide(
+                { type: "add-player", playerId: "late", playerName: "Late" },
+                { actorId: "host", trusted: true },
+            ),
+        ).toEqual({ accepted: false, reason: "invalid-action" });
+        expect(
+            game.decide({ type: "advance-phase", cards: [] }, { actorId: "host", trusted: true }),
+        ).toEqual({ accepted: false, reason: "invalid-action" });
+        expect(
+            game.decide(
+                { type: "record-outcome", winnersByPot: [["host"]] },
+                { actorId: "host", trusted: true },
+            ),
+        ).toEqual({ accepted: false, reason: "invalid-action" });
     });
 
     it("keeps command decisions pure", () => {

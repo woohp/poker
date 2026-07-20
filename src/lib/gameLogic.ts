@@ -30,7 +30,7 @@ export function getNextPlayerIndex(players: Player[], currentIndex: number): num
     for (let i = 1; i <= count; i++) {
         const idx = (currentIndex + i) % count;
         const player = players[idx];
-        if (player.isActive && !player.hasFolded) {
+        if (player.isActive && !player.hasFolded && player.chips > 0) {
             return idx;
         }
     }
@@ -122,6 +122,7 @@ export function getValidActions(state: GameState, player: Player): PlayerAction[
     if (
         !player.isActive ||
         player.hasFolded ||
+        player.chips <= 0 ||
         !player.isCurrentTurn ||
         state.phase === "waiting" ||
         state.phase === "showdown"
@@ -138,11 +139,11 @@ export function getValidActions(state: GameState, player: Player): PlayerAction[
         actions.push("call");
     }
 
-    if (player.chips > toCall) {
+    if (!player.hasActed && player.chips >= toCall + state.minRaise) {
         actions.push("raise");
     }
 
-    if (player.chips > 0) {
+    if (player.chips <= toCall || !player.hasActed) {
         actions.push("allin");
     }
 
@@ -165,7 +166,7 @@ export function processAction(
         return false;
     }
 
-    let increasedBet = false;
+    let reopensBetting = false;
 
     switch (action) {
         case "fold":
@@ -182,36 +183,40 @@ export function processAction(
             break;
         }
         case "raise": {
-            const targetBet = amount || 0;
-            if (targetBet < state.currentBet + state.minRaise) {
+            const targetBet = amount ?? 0;
+            const raiseContribution = targetBet - player.currentBet;
+            if (
+                !Number.isSafeInteger(targetBet) ||
+                targetBet < state.currentBet + state.minRaise ||
+                raiseContribution > player.chips
+            ) {
                 return false;
             }
             const previousBet = state.currentBet;
-            const raiseContribution = targetBet - player.currentBet;
-            contributeChips(state, player, Math.min(raiseContribution, player.chips));
-            if (player.currentBet <= previousBet) {
-                return false;
-            }
+            contributeChips(state, player, raiseContribution);
             player.hasActed = true;
             state.minRaise = player.currentBet - previousBet;
             state.currentBet = player.currentBet;
-            increasedBet = true;
+            reopensBetting = true;
             break;
         }
         case "allin": {
             const previousBet = state.currentBet;
             contributeChips(state, player, player.chips);
             player.hasActed = true;
-            if (player.currentBet > state.currentBet) {
-                state.minRaise = player.currentBet - previousBet;
+            if (player.currentBet > previousBet) {
+                const raiseSize = player.currentBet - previousBet;
                 state.currentBet = player.currentBet;
-                increasedBet = true;
+                if (raiseSize >= state.minRaise) {
+                    state.minRaise = raiseSize;
+                    reopensBetting = true;
+                }
             }
             break;
         }
     }
 
-    if (increasedBet) {
+    if (reopensBetting) {
         for (const otherPlayer of state.players) {
             if (
                 otherPlayer.id !== player.id &&
@@ -326,6 +331,11 @@ export function isBettingRoundComplete(state: GameState): boolean {
     }
 
     const activePlayers = state.players.filter((player) => player.isActive && !player.hasFolded);
+    const playersWhoCanAct = activePlayers.filter((player) => player.chips > 0);
+    if (playersWhoCanAct.length === 0) return true;
+    if (playersWhoCanAct.length === 1) {
+        return playersWhoCanAct[0]!.currentBet === state.currentBet;
+    }
     return activePlayers.every((player) => {
         if (player.chips === 0) {
             return true;
@@ -360,16 +370,22 @@ export function applyPayouts(
     }
 
     const total = payouts.reduce((sum, payout) => sum + payout.amount, 0);
-    if (total !== state.pot || payouts.some((payout) => payout.amount < 0)) {
+    const playersById = new Map(state.players.map((player) => [player.id, player]));
+    if (
+        total !== state.pot ||
+        payouts.some(
+            (payout) =>
+                !Number.isSafeInteger(payout.amount) ||
+                payout.amount < 0 ||
+                !playersById.has(payout.playerId),
+        )
+    ) {
         return false;
     }
 
     const recordedPayouts: Payout[] = [];
     for (const payout of payouts) {
-        const player = state.players.find((entry) => entry.id === payout.playerId);
-        if (!player) {
-            return false;
-        }
+        const player = playersById.get(payout.playerId)!;
         player.chips += payout.amount;
         recordedPayouts.push({
             playerId: player.id,

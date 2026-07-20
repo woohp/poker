@@ -23,6 +23,7 @@ import {
     loadSession,
     saveGame,
     saveSession,
+    type SavedDealerState,
     type SavedGame,
 } from "./lib/persistence";
 import { compareHands, createShuffledDeck, evaluateHand, formatCard } from "./lib/poker";
@@ -75,7 +76,6 @@ let localHoleCards: Card[] = $state([]);
 let localHoleRound = $state(0);
 let hostDeck: Card[] = [];
 let hostHoleCards = new Map<string, Card[]>();
-const DEALER_STORAGE_KEY = "poker_private_dealer_state";
 const PHASE_ADVANCE_DELAY_MS = Number(import.meta.env.VITE_PHASE_ADVANCE_DELAY_MS || 1000);
 
 onMount(() => {
@@ -218,7 +218,10 @@ function publishCurrentState() {
     persistHistory();
 }
 
-function dispatchTrustedCommand(command: PokerCommand): PokerEngineResult | null {
+function dispatchTrustedCommand(
+    command: PokerCommand,
+    publish = true,
+): PokerEngineResult | null {
     if (!gameEngine || !localPlayerId) return null;
     const snapshot = gameEngine.snapshot();
     const result = gameEngine.dispatch(
@@ -231,7 +234,7 @@ function dispatchTrustedCommand(command: PokerCommand): PokerEngineResult | null
     );
     if (result.accepted) {
         setGameSnapshot(result.snapshot);
-        publishCurrentState();
+        if (publish) publishCurrentState();
     }
     return result;
 }
@@ -241,6 +244,7 @@ function persistHistory() {
     saveGame({
         config: pokerGameConfig,
         history: gameEngine.history(),
+        dealer: getSavedDealerState(),
     });
 }
 
@@ -262,7 +266,7 @@ async function restoreSession(
                 history: savedGame.history,
             });
             setGameSnapshot(gameEngine.snapshot());
-            restoreDealerState(gameEngine.snapshot().state.round);
+            restoreDealerState(savedGame.dealer, gameEngine.snapshot().state);
             await peerManager.createHost(savedPeerId, savedRoomCode);
             isConnectedToGame = true;
             publishCurrentState();
@@ -406,15 +410,33 @@ function applyHostAction(
 function commitProcessedCommand(processed: PokerEngineResult) {
     setGameSnapshot(processed.snapshot);
     publishCurrentState();
+    scheduleAutomaticPhaseAdvance();
+}
 
-    if (isBettingRoundComplete(processed.snapshot.state)) {
-        setTimeout(() => {
-            const gs = gameState;
-            if (gs && gs.phase !== "showdown") {
-                advanceHostPhase();
-            }
-        }, PHASE_ADVANCE_DELAY_MS);
+function scheduleAutomaticPhaseAdvance() {
+    if (
+        !isHost ||
+        !gameSnapshot ||
+        !gameState ||
+        gameState.phase === "waiting" ||
+        gameState.phase === "showdown" ||
+        !isBettingRoundComplete(gameState)
+    ) {
+        return;
     }
+
+    const expectedRevision = gameSnapshot.revision;
+    setTimeout(() => {
+        if (
+            gameSnapshot?.revision === expectedRevision &&
+            gameState &&
+            gameState.phase !== "waiting" &&
+            gameState.phase !== "showdown" &&
+            isBettingRoundComplete(gameState)
+        ) {
+            advanceHostPhase();
+        }
+    }, PHASE_ADVANCE_DELAY_MS);
 }
 
 function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
@@ -613,46 +635,75 @@ function startGame() {
 }
 
 function startHand() {
-    const result = dispatchTrustedCommand({ type: "start-hand" });
+    const result = dispatchTrustedCommand({ type: "start-hand" }, false);
     if (!result?.accepted) return;
 
     localHoleCards = [];
     localHoleRound = 0;
-    if (gameState?.config.mode !== "digital" || gameState.phase !== "preflop") return;
-
-    hostDeck = createShuffledDeck();
+    hostDeck = [];
     hostHoleCards = new Map();
-    for (const player of gameState.players.filter((entry) => entry.isActive)) {
-        hostHoleCards.set(player.id, [hostDeck.pop()!, hostDeck.pop()!]);
-    }
-    for (const playerId of hostHoleCards.keys()) sendHoleCards(playerId);
-    saveDealerState();
-}
 
-function saveDealerState() {
-    if (!gameState || !isHost) return;
-    localStorage.setItem(
-        DEALER_STORAGE_KEY,
-        JSON.stringify({ round: gameState.round, deck: hostDeck, hands: [...hostHoleCards] }),
-    );
-}
-
-function restoreDealerState(round: number) {
-    try {
-        const saved = JSON.parse(localStorage.getItem(DEALER_STORAGE_KEY) || "null") as {
-            round: number;
-            deck: Card[];
-            hands: Array<[string, Card[]]>;
-        } | null;
-        if (saved?.round === round) {
-            hostDeck = saved.deck;
-            hostHoleCards = new Map(saved.hands);
-            localHoleCards = hostHoleCards.get(localPlayerId) || [];
-            localHoleRound = round;
+    if (gameState?.config.mode === "digital" && gameState.phase === "preflop") {
+        hostDeck = createShuffledDeck();
+        for (const player of gameState.players.filter((entry) => entry.isActive)) {
+            hostHoleCards.set(player.id, [hostDeck.pop()!, hostDeck.pop()!]);
         }
-    } catch {
-        localStorage.removeItem(DEALER_STORAGE_KEY);
     }
+
+    publishCurrentState();
+    for (const playerId of hostHoleCards.keys()) sendHoleCards(playerId);
+    scheduleAutomaticPhaseAdvance();
+}
+
+function getSavedDealerState(): SavedDealerState | undefined {
+    if (
+        !gameState ||
+        gameState.config.mode !== "digital" ||
+        gameState.phase === "waiting" ||
+        hostHoleCards.size === 0
+    ) {
+        return undefined;
+    }
+
+    return {
+        round: gameState.round,
+        deck: [...hostDeck],
+        hands: [...hostHoleCards].map(([playerId, cards]) => [playerId, [...cards]]),
+    };
+}
+
+function restoreDealerState(saved: SavedDealerState | undefined, state: GameState) {
+    hostDeck = [];
+    hostHoleCards = new Map();
+    localHoleCards = [];
+    localHoleRound = 0;
+    if (state.config.mode !== "digital" || state.phase === "waiting") return;
+    if (!saved || saved.round !== state.round) {
+        throw new Error("Missing digital dealer state");
+    }
+
+    const hands = new Map(saved.hands);
+    const activePlayerIds = state.players
+        .filter((player) => player.isActive)
+        .map((player) => player.id);
+    const allCards = [...saved.deck, ...saved.hands.flatMap(([, cards]) => cards), ...state.communityCards];
+    if (
+        hands.size !== saved.hands.length ||
+        hands.size !== activePlayerIds.length ||
+        activePlayerIds.some((playerId) => hands.get(playerId)?.length !== 2) ||
+        allCards.length !== 52 ||
+        allCards.some((card) => !/^[2-9TJQKA][cdhs]$/.test(card)) ||
+        new Set(allCards).size !== allCards.length
+    ) {
+        throw new Error("Invalid digital dealer state");
+    }
+
+    hostDeck = [...saved.deck];
+    hostHoleCards = new Map(
+        [...hands].map(([playerId, cards]) => [playerId, [...cards]]),
+    );
+    localHoleCards = hostHoleCards.get(localPlayerId) || [];
+    localHoleRound = state.round;
 }
 
 function scheduleHoleCardRequests(round: number) {
@@ -693,6 +744,7 @@ function sendHoleCards(playerId: string) {
 function advanceHostPhase() {
     if (!gameState) return;
     const previousPhase = gameState.phase;
+    const nextDeck = [...hostDeck];
     const cards: Card[] = [];
     let showdown: { winnersByPot: string[][]; revealedHands: RevealedHand[] } | undefined;
 
@@ -703,17 +755,30 @@ function advanceHostPhase() {
                 : previousPhase === "flop" || previousPhase === "turn"
                   ? 1
                   : 0;
-        for (let index = 0; index < drawCount; index++) cards.push(hostDeck.pop()!);
+        for (let index = 0; index < drawCount; index++) {
+            const card = nextDeck.pop();
+            if (!card) {
+                errorMessage = "The saved digital deck is incomplete.";
+                return;
+            }
+            cards.push(card);
+        }
         if (previousPhase === "river") showdown = calculateDigitalShowdown();
     }
 
-    const result = dispatchTrustedCommand({
-        type: "advance-phase",
-        cards,
-        winnersByPot: showdown?.winnersByPot,
-        revealedHands: showdown?.revealedHands,
-    });
-    if (result?.accepted && gameState?.config.mode === "digital") saveDealerState();
+    const result = dispatchTrustedCommand(
+        {
+            type: "advance-phase",
+            cards,
+            winnersByPot: showdown?.winnersByPot,
+            revealedHands: showdown?.revealedHands,
+        },
+        false,
+    );
+    if (!result?.accepted) return;
+    hostDeck = nextDeck;
+    publishCurrentState();
+    scheduleAutomaticPhaseAdvance();
 }
 
 function calculateDigitalShowdown(): {
