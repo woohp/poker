@@ -52,17 +52,13 @@ This is currently a casual, trusted-room app. Anyone with the room code is treat
 Canonical construction and restoration:
 
 ```typescript
-const game = new PokerGame(config, events);
-const engine = new GameEngine(game, {
-    epoch,
-    revision,
-    history: events,
-});
+const game = new PokerGame(config);
+const engine = new GameEngine(game, { history });
 ```
 
-- `gameEngine.ts` is generic infrastructure. It owns the authority epoch, command revision, deduplication, and authoritative event history. It appends events only for accepted commands and knows nothing about poker, networking, persistence, or Svelte. Do not add arbitrary state replacement or a `commit()` escape hatch; state changes must originate as game commands and events.
-- `pokerGame.ts` is the stateful poker implementation. `PokerGame(config, events?)` rebuilds its private derived state by replaying events but does not retain history. `execute()` delegates command decisions to pure `decidePokerCommand()` logic, accepted events are applied through `evolvePokerState()`, and `snapshot()` returns a detached UI/network view. `PokerEvent` currently records accepted commands and their context rather than granular domain facts; treat the persisted format as version-sensitive until versioned domain events and migrations are introduced.
-- The host's event history is the durable source of truth. `persistence.ts` stores host configuration, epoch, revision, and history. Clients do not persist game state; after refresh they reconnect and receive a current snapshot.
+- `gameEngine.ts` is generic infrastructure. It owns command revision, deduplication, and authoritative event history. History retains accepted command boundaries and command IDs; revision is always `history.length`. The engine restores a fresh game by applying history, asks the game to decide commands without mutation, atomically applies accepted event batches, and only then appends them. It knows nothing about poker, networking, persistence, or Svelte. Do not add arbitrary state replacement or a `commit()` escape hatch; state changes must originate as game commands and events.
+- `pokerGame.ts` is the stateful poker implementation. `PokerGame(config)` begins from initial state and does not retain history. `decide()` delegates to pure `decidePokerCommand()` logic, `apply(events)` evolves a temporary state and commits only after the complete batch succeeds, and `snapshot()` returns a detached UI/network view. `PokerEvent` currently records accepted commands and their context rather than granular domain facts; treat the persisted format as version-sensitive until versioned domain events and migrations are introduced.
+- The host's event history is the durable source of truth. `persistence.ts` stores host configuration and history. Clients do not persist game state; after refresh they reconnect and receive a current snapshot.
 - `pokerProtocol.ts` translates poker network messages to/from generic engine commands and results.
 - `peerManager.ts` is transport only: Yjs/WebRTC discovery, commands, acknowledgements, awareness, and replicated snapshots. Transport must not apply rules or mutate revisions.
 - `gameLogic.ts` contains poker rule primitives and has no networking or persistence side effects.
@@ -186,6 +182,10 @@ let doubled = $derived(count * 2);
 4. Run `npm test` - unit tests pass
 5. Run relevant E2E tests; use `npm run test:stress` for synchronization/state-engine changes
 6. Verify `npm run build` succeeds
+
+## Documentation
+
+The root `README.md` is still a starter document. Replacing it with detailed project architecture is intentionally low priority while the architecture is changing; do that near the end once setup, gameplay assumptions, recovery behavior, and limitations are stable. Continue updating focused documentation when public behavior or operational steps change.
 
 ## Dependencies
 

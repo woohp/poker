@@ -61,25 +61,25 @@ export class PokerGame implements Game<
 > {
     private state: GameState;
 
-    constructor(config: PokerGameConfig, events: readonly PokerEvent[] = []) {
+    constructor(config: PokerGameConfig) {
         this.state = createInitialGameState(config.game, config.hostPlayerName, config.hostPeerId);
-        for (const event of events) this.state = evolvePokerState(this.state, event);
     }
 
     snapshot(): GameState {
         return cloneState(this.state);
     }
 
-    execute(
+    decide(
         command: PokerCommand,
         context: PokerCommandContext,
     ): GameExecutionResult<PokerEvent, PokerRejectionReason> {
-        const decision = decidePokerCommand(this.state, command, context);
-        if (!decision.accepted) return decision;
-        for (const event of decision.events) {
-            this.state = evolvePokerState(this.state, event);
-        }
-        return decision;
+        return decidePokerCommand(this.state, command, context);
+    }
+
+    apply(events: readonly PokerEvent[]): void {
+        let nextState = this.state;
+        for (const event of events) nextState = evolvePokerState(nextState, event);
+        this.state = nextState;
     }
 }
 

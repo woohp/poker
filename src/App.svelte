@@ -224,7 +224,6 @@ function dispatchTrustedCommand(command: PokerCommand): PokerEngineResult | null
     const result = gameEngine.dispatch(
         {
             id: crypto.randomUUID(),
-            epoch: snapshot.epoch,
             expectedRevision: snapshot.revision,
             payload: command,
         },
@@ -239,11 +238,8 @@ function dispatchTrustedCommand(command: PokerCommand): PokerEngineResult | null
 
 function persistHistory() {
     if (!isHost || !gameEngine || !pokerGameConfig) return;
-    const snapshot = gameEngine.snapshot();
     saveGame({
         config: pokerGameConfig,
-        epoch: snapshot.epoch,
-        revision: snapshot.revision,
         history: gameEngine.history(),
     });
 }
@@ -262,14 +258,9 @@ async function restoreSession(
         if (savedIsHost) {
             if (!savedGame) throw new Error("Missing host game history");
             pokerGameConfig = savedGame.config;
-            gameEngine = new GameEngine(
-                new PokerGame(savedGame.config, savedGame.history),
-                {
-                    epoch: savedGame.epoch,
-                    revision: savedGame.revision,
-                    history: savedGame.history,
-                },
-            );
+            gameEngine = new GameEngine(new PokerGame(savedGame.config), {
+                history: savedGame.history,
+            });
             setGameSnapshot(gameEngine.snapshot());
             restoreDealerState(gameEngine.snapshot().state.round);
             await peerManager.createHost(savedPeerId, savedRoomCode);
@@ -395,7 +386,6 @@ function applyHostAction(
     const processed = gameEngine.dispatch(
         {
             id: crypto.randomUUID(),
-            epoch: snapshot.epoch,
             expectedRevision: snapshot.revision,
             payload: {
                 type: "player-action",
@@ -587,6 +577,8 @@ async function joinGame() {
 
     errorMessage = "";
     isLoading = true;
+    gameSnapshot = null;
+    gameState = null;
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
     isHost = false;
     roomCode = joinCode.trim();
@@ -775,7 +767,6 @@ function performAction(action: PlayerAction) {
         const message: ActionMessage = {
             type: "action",
             commandId: crypto.randomUUID(),
-            epoch: gameSnapshot.epoch,
             playerId: localPlayerId,
             round: gameState.round,
             expectedRevision: gameSnapshot.revision,
@@ -809,8 +800,6 @@ function describeCommandRejection(reason: string | undefined): string {
             return "The host rejected an action for another player.";
         case "wrong-hand":
             return "The hand advanced before this action arrived.";
-        case "stale-authority":
-            return "The host changed before this action arrived.";
         case "stale-state":
             return "The turn changed before this action arrived.";
         default:
@@ -938,6 +927,7 @@ async function leaveGame() {
     announceDeparture();
     await new Promise((resolve) => setTimeout(resolve, 100));
     disconnectPeerManager();
+    gameSnapshot = null;
     gameState = null;
     isHost = false;
     localPlayerId = "";

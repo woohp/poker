@@ -4,63 +4,77 @@ export type GameExecutionResult<Event, Reason extends string> =
 
 export interface Game<State, Command, Event, Context, Reason extends string> {
     snapshot(): State;
-    execute(command: Command, context: Context): GameExecutionResult<Event, Reason>;
+    decide(command: Command, context: Context): GameExecutionResult<Event, Reason>;
+    apply(events: readonly Event[]): void;
 }
 
 export interface GameSnapshot<State> {
-    epoch: string;
     revision: number;
     state: State;
 }
 
 export interface GameCommand<Command> {
     id: string;
-    epoch: string;
     expectedRevision: number;
     payload: Command;
+}
+
+export interface GameHistoryEntry<Event> {
+    commandId: string;
+    events: readonly Event[];
 }
 
 export interface GameCommandResult<State, Event, Reason extends string> {
     commandId: string;
     accepted: boolean;
     revision: number;
-    reason?: Reason | "stale-authority" | "stale-state";
+    reason?: Reason | "stale-state";
     events: readonly Event[];
     snapshot: GameSnapshot<State>;
     duplicate: boolean;
 }
 
 export interface GameEngineOptions<Event> {
-    epoch?: string;
-    revision?: number;
-    history?: readonly Event[];
+    history?: readonly GameHistoryEntry<Event>[];
+}
+
+interface CachedCommandResult<Event, Reason extends string> {
+    accepted: boolean;
+    reason?: Reason | "stale-state";
+    events: readonly Event[];
 }
 
 export class GameEngine<State, Command, Event, Context, Reason extends string> {
-    private epoch: string;
-    private revision: number;
-    private results = new Map<string, GameCommandResult<State, Event, Reason>>();
-    private events: Event[];
+    private readonly entries: GameHistoryEntry<Event>[];
+    private readonly results = new Map<string, CachedCommandResult<Event, Reason>>();
 
     constructor(
         private readonly game: Game<State, Command, Event, Context, Reason>,
         options: GameEngineOptions<Event> = {},
     ) {
-        this.epoch = options.epoch ?? crypto.randomUUID();
-        this.events = [...structuredClone(options.history ?? [])];
-        this.revision = options.revision ?? this.events.length;
+        this.entries = [...structuredClone(options.history ?? [])];
+
+        for (const entry of this.entries) {
+            if (this.results.has(entry.commandId)) {
+                throw new Error(`Duplicate command in game history: ${entry.commandId}`);
+            }
+            this.game.apply(entry.events);
+            this.results.set(entry.commandId, {
+                accepted: true,
+                events: structuredClone(entry.events),
+            });
+        }
     }
 
     snapshot(): GameSnapshot<State> {
         return {
-            epoch: this.epoch,
-            revision: this.revision,
+            revision: this.entries.length,
             state: this.game.snapshot(),
         };
     }
 
-    history(): readonly Event[] {
-        return structuredClone(this.events);
+    history(): readonly GameHistoryEntry<Event>[] {
+        return structuredClone(this.entries);
     }
 
     dispatch(
@@ -68,51 +82,51 @@ export class GameEngine<State, Command, Event, Context, Reason extends string> {
         context: Context,
     ): GameCommandResult<State, Event, Reason> {
         const cached = this.results.get(command.id);
-        if (cached) return { ...structuredClone(cached), duplicate: true };
+        if (cached) return this.result(command.id, cached, true);
 
-        if (command.epoch !== this.epoch) {
-            return this.reject(command.id, "stale-authority");
-        }
-        if (command.expectedRevision !== this.revision) {
+        if (command.expectedRevision !== this.entries.length) {
             return this.reject(command.id, "stale-state");
         }
 
-        const execution = this.game.execute(command.payload, context);
-        if (!execution.accepted) {
-            return this.reject(command.id, execution.reason);
+        const decision = this.game.decide(command.payload, context);
+        if (!decision.accepted) {
+            return this.reject(command.id, decision.reason);
         }
 
-        this.revision += 1;
-        this.events.push(...structuredClone(execution.events));
-        return this.cache({
-            commandId: command.id,
-            accepted: true,
-            revision: this.revision,
-            events: structuredClone(execution.events),
-            snapshot: this.snapshot(),
-            duplicate: false,
-        });
+        const events = structuredClone(decision.events);
+        this.game.apply(events);
+        this.entries.push({ commandId: command.id, events });
+        return this.cacheAndReturn(command.id, { accepted: true, events });
     }
 
     private reject(
         commandId: string,
-        reason: Reason | "stale-authority" | "stale-state",
+        reason: Reason | "stale-state",
     ): GameCommandResult<State, Event, Reason> {
-        return this.cache({
-            commandId,
-            accepted: false,
-            revision: this.revision,
-            reason,
-            events: [],
-            snapshot: this.snapshot(),
-            duplicate: false,
-        });
+        return this.cacheAndReturn(commandId, { accepted: false, reason, events: [] });
     }
 
-    private cache(
-        result: GameCommandResult<State, Event, Reason>,
+    private cacheAndReturn(
+        commandId: string,
+        result: CachedCommandResult<Event, Reason>,
     ): GameCommandResult<State, Event, Reason> {
-        this.results.set(result.commandId, structuredClone(result));
-        return result;
+        this.results.set(commandId, structuredClone(result));
+        return this.result(commandId, result, false);
+    }
+
+    private result(
+        commandId: string,
+        result: CachedCommandResult<Event, Reason>,
+        duplicate: boolean,
+    ): GameCommandResult<State, Event, Reason> {
+        return {
+            commandId,
+            accepted: result.accepted,
+            reason: result.reason,
+            events: structuredClone(result.events),
+            revision: this.entries.length,
+            snapshot: this.snapshot(),
+            duplicate,
+        };
     }
 }

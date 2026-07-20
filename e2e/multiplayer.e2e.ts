@@ -102,14 +102,14 @@ test("the host can refresh mid-hand without replaying old actions", async ({ bro
         await expect(host.locator('button[data-action="fold"]')).toBeVisible();
         const revisionBeforeRefresh = await host.evaluate(() => {
             const raw = localStorage.getItem("poker_game_state");
-            return raw ? (JSON.parse(raw) as { revision: number }).revision : -1;
+            return raw ? (JSON.parse(raw) as { history: unknown[] }).history.length : -1;
         });
 
         await host.reload();
         await expect(host.locator('button[data-action="fold"]')).toBeVisible({ timeout: 15_000 });
         const revisionAfterRefresh = await host.evaluate(() => {
             const raw = localStorage.getItem("poker_game_state");
-            return raw ? (JSON.parse(raw) as { revision: number }).revision : -1;
+            return raw ? (JSON.parse(raw) as { history: unknown[] }).history.length : -1;
         });
         expect(revisionAfterRefresh).toBeGreaterThanOrEqual(revisionBeforeRefresh);
 

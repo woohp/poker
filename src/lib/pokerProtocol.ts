@@ -20,7 +20,6 @@ export type PokerEngineResult = GameCommandResult<GameState, PokerEvent, PokerRe
 export function toEngineCommand(message: ActionMessage): GameCommand<PokerCommand> {
     return {
         id: message.commandId,
-        epoch: message.epoch,
         expectedRevision: message.expectedRevision,
         payload: {
             type: "player-action",

@@ -253,6 +253,9 @@ export class PeerManager {
 
     broadcastState(snapshot: GameSnapshot): void {
         this.stateMap?.set("game", JSON.stringify(snapshot));
+        for (const peerId of this.getAwarenessPeerIds()) {
+            this.sendPrivateToPeer(peerId, { type: "state", snapshot });
+        }
     }
 
     getLocalPeerId(): string {

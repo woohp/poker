@@ -19,13 +19,24 @@ const config: PokerGameConfig = {
     hostPeerId: "host",
 };
 
+function execute(
+    game: PokerGame,
+    command: PokerCommand,
+    context: { actorId: string; trusted?: boolean },
+) {
+    const decision = game.decide(command, context);
+    if (decision.accepted) game.apply(decision.events);
+    return decision;
+}
+
 function createStartedGame(): PokerGame {
     const game = new PokerGame(config);
-    game.execute(
+    execute(
+        game,
         { type: "add-player", playerId: "guest", playerName: "Guest" },
         { actorId: "host", trusted: true },
     );
-    game.execute({ type: "start-hand" }, { actorId: "host", trusted: true });
+    execute(game, { type: "start-hand" }, { actorId: "host", trusted: true });
     return game;
 }
 
@@ -46,7 +57,7 @@ describe("PokerGame", () => {
         const before = game.snapshot();
         const command = createFoldCommand(game);
 
-        const result = game.execute(command, { actorId: command.playerId });
+        const result = execute(game, command, { actorId: command.playerId });
 
         expect(result.accepted).toBe(true);
         expect(before.players.find((player) => player.id === command.playerId)?.hasFolded).toBe(
@@ -62,35 +73,63 @@ describe("PokerGame", () => {
         const before = game.snapshot();
         const command = createFoldCommand(game);
 
-        const result = game.execute(command, { actorId: "different-player" });
+        const result = execute(game, command, { actorId: "different-player" });
 
         expect(result).toEqual({ accepted: false, reason: "wrong-player" });
         expect(game.snapshot()).toEqual(before);
     });
 
-    it("reconstructs its state by replaying constructor events", () => {
+    it("reconstructs its state by applying events", () => {
         const original = new PokerGame(config);
         const events: PokerEvent[] = [];
-        const addResult = original.execute(
+        const addResult = execute(
+            original,
             { type: "add-player", playerId: "guest", playerName: "Guest" },
             { actorId: "host", trusted: true },
         );
         if (!addResult.accepted) throw new Error("Expected player to be added");
         events.push(...addResult.events);
-        const startResult = original.execute(
+        const startResult = execute(
+            original,
             { type: "start-hand" },
             { actorId: "host", trusted: true },
         );
         if (!startResult.accepted) throw new Error("Expected hand to start");
         events.push(...startResult.events);
         const command = createFoldCommand(original);
-        const actionResult = original.execute(command, { actorId: command.playerId });
+        const actionResult = execute(original, command, { actorId: command.playerId });
         if (!actionResult.accepted) throw new Error("Expected accepted command");
         events.push(...actionResult.events);
 
-        const restored = new PokerGame(config, events);
+        const restored = new PokerGame(config);
+        restored.apply(events);
 
         expect(restored.snapshot()).toEqual(original.snapshot());
+    });
+
+    it("applies an event batch atomically", () => {
+        const game = new PokerGame(config);
+        const before = game.snapshot();
+        const events: PokerEvent[] = [
+            {
+                type: "command-executed",
+                command: { type: "add-player", playerId: "guest", playerName: "Guest" },
+                context: { actorId: "host", trusted: true },
+            },
+            {
+                type: "command-executed",
+                command: {
+                    type: "player-action",
+                    playerId: "guest",
+                    round: 0,
+                    action: "check",
+                },
+                context: { actorId: "guest" },
+            },
+        ];
+
+        expect(() => game.apply(events)).toThrow("Invalid poker history");
+        expect(game.snapshot()).toEqual(before);
     });
 
     it("keeps command decisions pure", () => {

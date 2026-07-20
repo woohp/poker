@@ -1,12 +1,11 @@
+import type { GameHistoryEntry } from "./gameEngine";
 import type { PokerEvent, PokerGameConfig } from "./pokerGame";
 const GAME_STORAGE_KEY = "poker_game_state";
 const SESSION_STORAGE_KEY = "poker_session";
 
 export interface SavedGame {
     config: PokerGameConfig;
-    epoch: string;
-    revision: number;
-    history: readonly PokerEvent[];
+    history: readonly GameHistoryEntry<PokerEvent>[];
 }
 
 export interface SessionData {

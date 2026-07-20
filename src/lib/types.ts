@@ -65,7 +65,6 @@ export type PlayerAction = "fold" | "check" | "call" | "raise" | "allin";
 export interface ActionMessage {
     type: "action";
     commandId: string;
-    epoch: string;
     playerId: string;
     round: number;
     expectedRevision: number;
@@ -87,7 +86,6 @@ export interface HoleCardsMessage {
 
 export type CommandRejectionReason =
     | "invalid-action"
-    | "stale-authority"
     | "stale-state"
     | "unauthorized"
     | "wrong-hand"

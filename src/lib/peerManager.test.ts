@@ -132,7 +132,6 @@ function sampleState(): GameState {
 
 function sampleSnapshot(revision = 0): GameSnapshot {
     return {
-        epoch: "authority-test",
         revision,
         state: sampleState(),
     };
@@ -222,7 +221,7 @@ describe("PeerManager", () => {
         expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(snapshot));
     });
 
-    it("broadcasts state through Yjs without a second unordered direct delivery", async () => {
+    it("broadcasts state directly with Yjs as a synchronization fallback", async () => {
         const peerManager = new PeerManager(
             () => {},
             () => {},
@@ -238,7 +237,15 @@ describe("PeerManager", () => {
 
         expect(snapshot.revision).toBe(0);
         expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(snapshot));
-        expect(provider.sentDirectMessages).toHaveLength(0);
+        expect(
+            provider.sentDirectMessages.map(({ peerId, payload }) => ({
+                peerId,
+                message: JSON.parse(new TextDecoder().decode(payload)) as PeerMessage,
+            })),
+        ).toEqual([
+            { peerId: "peer-a", message: { type: "state", snapshot } },
+            { peerId: "peer-b", message: { type: "state", snapshot } },
+        ]);
     });
 
     it("keeps the newest Yjs state", async () => {
@@ -322,7 +329,6 @@ describe("PeerManager", () => {
                 message: {
                     type: "action",
                     commandId: "command-earlier",
-                    epoch: "authority-test",
                     playerId: "guest-earlier",
                     round: 1,
                     expectedRevision: 1,
@@ -336,7 +342,6 @@ describe("PeerManager", () => {
             {
                 type: "action",
                 commandId: "command-earlier",
-                epoch: "authority-test",
                 playerId: "guest-earlier",
                 round: 1,
                 expectedRevision: 1,

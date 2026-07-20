@@ -3,9 +3,8 @@ import { createInitialGameState } from "./gameLogic";
 import { shouldApplyState } from "./syncLogic";
 import type { GameSnapshot } from "./types";
 
-function createSnapshot(revision: number, epoch = "authority-1"): GameSnapshot {
+function createSnapshot(revision: number): GameSnapshot {
     return {
-        epoch,
         revision,
         state: createInitialGameState(
             {
@@ -28,9 +27,5 @@ describe("state synchronization", () => {
 
     it("accepts a newer authoritative state", () => {
         expect(shouldApplyState(createSnapshot(11), createSnapshot(12))).toBe(true);
-    });
-
-    it("accepts a snapshot from a new authority epoch", () => {
-        expect(shouldApplyState(createSnapshot(12), createSnapshot(1, "authority-2"))).toBe(true);
     });
 });

@@ -107,17 +107,20 @@ describe("session and game persistence", () => {
                 hostPlayerName: "Host",
                 hostPeerId: "host",
             },
-            epoch: "authority-test",
-            revision: 3,
             history: [
                 {
-                    type: "command-executed" as const,
-                    command: {
-                        type: "add-player" as const,
-                        playerId: "guest",
-                        playerName: "Guest",
-                    },
-                    context: { actorId: "host", trusted: true },
+                    commandId: "command-1",
+                    events: [
+                        {
+                            type: "command-executed" as const,
+                            command: {
+                                type: "add-player" as const,
+                                playerId: "guest",
+                                playerName: "Guest",
+                            },
+                            context: { actorId: "host", trusted: true },
+                        },
+                    ],
                 },
             ],
         };
