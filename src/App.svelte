@@ -321,7 +321,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
         }
         case "action": {
             if (!gameEngine) break;
-            const processed = gameEngine.dispatch(toEngineCommand(message, fromPeerId), {
+            const processed = gameEngine.dispatch(toEngineCommand(message), {
                 actorId: fromPeerId,
             });
             if (processed.accepted && !processed.duplicate) {
@@ -344,7 +344,6 @@ function applyHostAction(
     const processed = gameEngine.dispatch(
         {
             id: crypto.randomUUID(),
-            actorId: playerId,
             epoch: snapshot.epoch,
             expectedRevision: snapshot.revision,
             payload: { playerId, round: snapshot.state.round, action, amount },

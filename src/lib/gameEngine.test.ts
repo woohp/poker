@@ -24,7 +24,6 @@ class CounterGame implements Game<number, number, { maximum: number }, "invalid-
 function createCommand(overrides: Partial<GameCommand<number>> = {}): GameCommand<number> {
     return {
         id: "command-1",
-        actorId: "player-1",
         epoch: "authority-1",
         expectedRevision: 4,
         payload: 3,

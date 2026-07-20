@@ -17,7 +17,6 @@ export interface GameSnapshot<State> {
 
 export interface GameCommand<Command> {
     id: string;
-    actorId: string;
     epoch: string;
     expectedRevision: number;
     payload: Command;

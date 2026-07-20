@@ -11,13 +11,9 @@ export type PokerEngine = GameEngine<
 
 export type PokerEngineResult = GameCommandResult<GameState, PokerRejectionReason>;
 
-export function toEngineCommand(
-    message: ActionMessage,
-    actorId: string,
-): GameCommand<PokerCommand> {
+export function toEngineCommand(message: ActionMessage): GameCommand<PokerCommand> {
     return {
         id: message.commandId,
-        actorId,
         epoch: message.epoch,
         expectedRevision: message.expectedRevision,
         payload: {
