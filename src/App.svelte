@@ -1,6 +1,7 @@
 <script lang="ts">
 import QRCode from "qrcode";
 import { onDestroy, onMount } from "svelte";
+import { GameCommandProcessor, type ProcessedCommand } from "./lib/commandProcessor";
 import {
     addPlayer,
     advancePhase,
@@ -12,7 +13,6 @@ import {
     isBettingRoundComplete,
     loadGameState,
     loadSession,
-    processAction,
     removePlayer,
     saveGameState,
     saveSession,
@@ -22,12 +22,13 @@ import { getStablePeerId, loadStablePeerId, resetStablePeerId } from "./lib/peer
 import { PeerManager } from "./lib/peerManager";
 import { compareHands, createShuffledDeck, evaluateHand, formatCard } from "./lib/poker";
 import { navigate, parseRoute, type Route } from "./lib/router";
-import { isCurrentAction, shouldApplyState } from "./lib/syncLogic";
+import { shouldApplyState } from "./lib/syncLogic";
 import type { Card, GameConfig, GameMode, GameState, PeerMessage, Player } from "./lib/types";
 
 let route: Route = $state({ name: "home" });
 let isLoading = $state(false);
 let peerManager: PeerManager | null = $state(null);
+let commandProcessor = new GameCommandProcessor();
 let gameState: GameState | null = $state(null);
 let playerName = $state("");
 let joinCode = $state("");
@@ -276,12 +277,11 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             break;
         }
         case "action": {
-            if (
-                !isCurrentAction(gameState, message, fromPeerId) ||
-                !applyHostAction(message.playerId, message.action, message.amount)
-            ) {
-                peerManager?.sendPrivateToPeer(fromPeerId, { type: "state", state: gameState });
+            const processed = commandProcessor.process(gameState, message, fromPeerId);
+            if (processed.result.accepted && !processed.duplicate) {
+                commitProcessedCommand(processed);
             }
+            peerManager?.sendPrivateToPeer(fromPeerId, processed.result);
             break;
         }
     }
@@ -292,10 +292,29 @@ function applyHostAction(
     action: "fold" | "check" | "call" | "raise" | "allin",
     amount?: number,
 ): boolean {
-    if (!gameState || !processAction(gameState, playerId, action, amount)) {
-        return false;
-    }
+    if (!gameState) return false;
 
+    const processed = commandProcessor.process(
+        gameState,
+        {
+            type: "action",
+            commandId: crypto.randomUUID(),
+            playerId,
+            round: gameState.round,
+            expectedRevision: gameState.revision,
+            action,
+            amount,
+        },
+        playerId,
+    );
+    if (!processed.result.accepted) return false;
+
+    commitProcessedCommand(processed);
+    return true;
+}
+
+function commitProcessedCommand(processed: ProcessedCommand) {
+    gameState = processed.state;
     peerManager?.broadcastState(gameState);
     saveGameState(gameState);
 
@@ -307,8 +326,6 @@ function applyHostAction(
             }
         }, PHASE_ADVANCE_DELAY_MS);
     }
-
-    return true;
 }
 
 function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
@@ -322,6 +339,10 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
         }
         case "state": {
             applyIncomingState(message.state);
+            break;
+        }
+        case "commandResult": {
+            if (message.state) applyIncomingState(message.state);
             break;
         }
         case "joinResponse": {
@@ -393,6 +414,7 @@ async function createGame() {
     errorMessage = "";
     isLoading = true;
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
+    commandProcessor = new GameCommandProcessor();
     isHost = true;
 
     try {

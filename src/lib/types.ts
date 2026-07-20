@@ -83,6 +83,21 @@ export interface HoleCardsMessage {
     cards: Card[];
 }
 
+export type CommandRejectionReason =
+    | "invalid-action"
+    | "stale-state"
+    | "wrong-hand"
+    | "wrong-player";
+
+export interface CommandResultMessage {
+    type: "commandResult";
+    commandId: string;
+    accepted: boolean;
+    revision: number;
+    reason?: CommandRejectionReason;
+    state?: GameState;
+}
+
 export interface StateUpdateMessage {
     type: "state";
     state: GameState;
@@ -106,6 +121,7 @@ export interface JoinResponseMessage {
 
 export type PeerMessage =
     | ActionMessage
+    | CommandResultMessage
     | HoleCardsRequestMessage
     | HoleCardsMessage
     | StateUpdateMessage
