@@ -88,6 +88,42 @@ test("a player can refresh during their turn and continue", async ({ browser }) 
     }
 });
 
+test("the host can refresh mid-hand without replaying old actions", async ({ browser }) => {
+    const { hostContext, guestContext, host, guest } = await joinGame(browser);
+
+    try {
+        await host.getByText("Start Game", { exact: true }).click();
+        const guestAction = guest.locator(
+            'button[data-action="check"], button[data-action="call"]',
+        );
+        await expect(guestAction).toBeVisible();
+        await guestAction.click();
+
+        await expect(host.locator('button[data-action="fold"]')).toBeVisible();
+        const revisionBeforeRefresh = await host.evaluate(() => {
+            const raw = localStorage.getItem("poker_game_state");
+            return raw ? (JSON.parse(raw) as { revision: number }).revision : -1;
+        });
+
+        await host.reload();
+        await expect(host.locator('button[data-action="fold"]')).toBeVisible({ timeout: 15_000 });
+        const revisionAfterRefresh = await host.evaluate(() => {
+            const raw = localStorage.getItem("poker_game_state");
+            return raw ? (JSON.parse(raw) as { revision: number }).revision : -1;
+        });
+        expect(revisionAfterRefresh).toBeGreaterThanOrEqual(revisionBeforeRefresh);
+
+        const hostAction = host.locator('button[data-action="check"], button[data-action="call"]');
+        await expect(hostAction).toBeVisible();
+        await hostAction.click();
+
+        await expect(host.getByText("flop", { exact: true })).toBeVisible({ timeout: 10_000 });
+        await expect(guest.getByText("flop", { exact: true })).toBeVisible({ timeout: 10_000 });
+    } finally {
+        await Promise.all([hostContext.close(), guestContext.close()]);
+    }
+});
+
 test("four players can act in turn", async ({ browser }) => {
     const contexts = await Promise.all(Array.from({ length: 4 }, () => browser.newContext()));
     const pages = await Promise.all(contexts.map((context) => context.newPage()));
