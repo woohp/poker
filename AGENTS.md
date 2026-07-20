@@ -47,7 +47,7 @@ The host is authoritative. Clients send versioned commands to the host and rende
 
 ### Trust Model
 
-This is currently a casual, trusted-room app. Anyone with the room code is treated as a trusted participant; host authority provides consistent game coordination, not cryptographic security or cheat resistance. Do not add signatures, public-key identities, or adversarial transport hardening unless public rooms, matchmaking, stakes, or untrusted participants become product goals. Still preserve basic sender consistency checks and normal input validation where they prevent accidental corruption.
+This is currently a casual, trusted-room app. Anyone with the room code is treated as a trusted participant; host authority provides consistent game coordination, not cryptographic security or cheat resistance. Do not add signatures, public-key identities, or adversarial transport hardening unless public rooms, matchmaking, stakes, or untrusted participants become product goals. Still preserve basic sender consistency checks and normal input validation where they prevent accidental corruption. A sender ID declared inside the shared Yjs document is only a consistency field, not verified identity; meaningful sender authentication would require a different transport or credentials.
 
 Canonical construction and restoration:
 
