@@ -45,6 +45,7 @@ export interface GameConfig {
 }
 
 export interface GameState {
+    revision: number;
     players: Player[];
     phase: GamePhase;
     pot: number;
@@ -62,7 +63,10 @@ export type PlayerAction = "fold" | "check" | "call" | "raise" | "allin";
 
 export interface ActionMessage {
     type: "action";
+    commandId: string;
     playerId: string;
+    round: number;
+    expectedRevision: number;
     action: PlayerAction;
     amount?: number;
 }
@@ -86,12 +90,14 @@ export interface StateUpdateMessage {
 
 export interface JoinRequestMessage {
     type: "join";
+    requestId: string;
     playerName: string;
     peerId: string;
 }
 
 export interface JoinResponseMessage {
     type: "joinResponse";
+    requestId: string;
     accepted: boolean;
     playerId?: string;
     state?: GameState;

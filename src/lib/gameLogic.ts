@@ -44,6 +44,7 @@ export function createInitialGameState(
     hostPeerId: string,
 ): GameState {
     return {
+        revision: 0,
         players: [createPlayer(hostPeerId, hostPlayerName, config.startingChips, true)],
         phase: "waiting",
         pot: 0,
@@ -70,7 +71,9 @@ export function loadGameState(): GameState | null {
     try {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
-            return JSON.parse(saved) as GameState;
+            const state = JSON.parse(saved) as GameState;
+            state.revision ??= 0;
+            return state;
         }
     } catch (error) {
         console.error("Failed to load game state:", error);

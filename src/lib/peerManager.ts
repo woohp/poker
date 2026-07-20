@@ -44,6 +44,7 @@ export class PeerManager {
     private isHost = false;
     private processedMessageIds: Set<string> = new Set();
     private connectedPeerIds: Set<string> = new Set();
+    private pendingJoinRequestId: string | null = null;
 
     constructor(onMessage: MessageHandler, onConnectionChange: ConnectionChangeHandler) {
         this.onMessage = onMessage;
@@ -64,6 +65,7 @@ export class PeerManager {
         this.roomCode = roomCode;
         await this.initializeProvider();
 
+        this.pendingJoinRequestId = randomId(16);
         this.messages?.push([
             JSON.stringify({
                 id: randomId(16),
@@ -71,6 +73,7 @@ export class PeerManager {
                 to: null,
                 message: {
                     type: "join",
+                    requestId: this.pendingJoinRequestId,
                     playerName,
                     peerId: this.localPeerId,
                 },
@@ -172,6 +175,13 @@ export class PeerManager {
                     continue;
                 }
 
+                if (envelope.message.type === "joinResponse") {
+                    if (envelope.message.requestId !== this.pendingJoinRequestId) {
+                        continue;
+                    }
+                    this.pendingJoinRequestId = null;
+                }
+
                 this.onMessage(envelope.message, envelope.from);
             } catch (error) {
                 console.error("Failed to parse room message:", error);
@@ -241,7 +251,8 @@ export class PeerManager {
         ]);
     }
 
-    broadcastState(state: GameState, _excludePeerId?: string): void {
+    broadcastState(state: GameState): void {
+        state.revision += 1;
         this.stateMap?.set("game", JSON.stringify(state));
     }
 
@@ -271,6 +282,7 @@ export class PeerManager {
         this.stateMap = null;
         this.processedMessageIds.clear();
         this.connectedPeerIds.clear();
+        this.pendingJoinRequestId = null;
     }
 }
 

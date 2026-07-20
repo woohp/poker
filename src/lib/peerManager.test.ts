@@ -110,6 +110,7 @@ function parseLastMessage(doc: Y.Doc): unknown {
 
 function sampleState(): GameState {
     return {
+        revision: 0,
         players: [],
         phase: "waiting",
         pot: 0,
@@ -173,11 +174,12 @@ describe("PeerManager", () => {
         expect(peerManager.getRoomCode()).toBe("room-2");
         expect(message.from).toBe("guest-1");
         expect(message.to).toBeNull();
-        expect(message.message).toEqual({
+        expect(message.message).toMatchObject({
             type: "join",
             playerName: "Alice",
             peerId: "guest-1",
         });
+        expect(message.message.type === "join" && message.message.requestId).toBeTruthy();
     });
 
     it("sends targeted messages and broadcasts shared state", async () => {
@@ -192,6 +194,7 @@ describe("PeerManager", () => {
 
         peerManager.sendToPeer("guest-2", {
             type: "joinResponse",
+            requestId: "request-2",
             accepted: true,
             playerId: "guest-2",
             state,
@@ -224,8 +227,9 @@ describe("PeerManager", () => {
         const state = sampleState();
         state.pot = 75;
 
-        peerManager.broadcastState(state, "peer-b");
+        peerManager.broadcastState(state);
 
+        expect(state.revision).toBe(1);
         expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(state));
         expect(provider.sentDirectMessages).toHaveLength(0);
     });
@@ -266,6 +270,7 @@ describe("PeerManager", () => {
                 to: null,
                 message: {
                     type: "join",
+                    requestId: "request-3",
                     playerName: "Bob",
                     peerId: "guest-3",
                 },
@@ -275,6 +280,7 @@ describe("PeerManager", () => {
         expect(onMessage).toHaveBeenCalledWith(
             {
                 type: "join",
+                requestId: "request-3",
                 playerName: "Bob",
                 peerId: "guest-3",
             },
@@ -293,7 +299,12 @@ describe("PeerManager", () => {
                 id: "msg-later",
                 from: "guest-later",
                 to: null,
-                message: { type: "join", playerName: "Later", peerId: "guest-later" },
+                message: {
+                    type: "join",
+                    requestId: "request-later",
+                    playerName: "Later",
+                    peerId: "guest-later",
+                },
             }),
         ]);
         messages.insert(0, [
@@ -301,57 +312,69 @@ describe("PeerManager", () => {
                 id: "msg-earlier",
                 from: "guest-earlier",
                 to: "host-ordered",
-                message: { type: "action", playerId: "guest-earlier", action: "check" },
+                message: {
+                    type: "action",
+                    commandId: "command-earlier",
+                    playerId: "guest-earlier",
+                    round: 1,
+                    expectedRevision: 1,
+                    action: "check",
+                },
             }),
         ]);
 
         expect(onMessage).toHaveBeenCalledTimes(2);
         expect(onMessage).toHaveBeenLastCalledWith(
-            { type: "action", playerId: "guest-earlier", action: "check" },
+            {
+                type: "action",
+                commandId: "command-earlier",
+                playerId: "guest-earlier",
+                round: 1,
+                expectedRevision: 1,
+                action: "check",
+            },
             "guest-earlier",
         );
     });
 
-    it("delivers targeted messages to the matching client only", async () => {
+    it("delivers only the join response matching the current request", async () => {
         const onMessage = vi.fn();
         const peerManager = new PeerManager(onMessage, () => {});
         await peerManager.joinGame("room-5", "Cara", "guest-4");
 
         const provider = webtorrentMock.instances[0]!;
+        const joinEnvelope = parseLastMessage(provider.doc) as {
+            message: { type: "join"; requestId: string };
+        };
+        const response = {
+            type: "joinResponse" as const,
+            requestId: joinEnvelope.message.requestId,
+            accepted: true,
+            playerId: "guest-4",
+            state: sampleState(),
+        };
         provider.doc.getArray<string>("messages").push([
             JSON.stringify({
-                id: "msg-ignore",
+                id: "msg-stale",
                 from: "host-4",
-                to: "someone-else",
+                to: "guest-4",
                 message: {
                     type: "joinResponse",
+                    requestId: "old-request",
                     accepted: false,
-                    message: "ignore",
+                    message: "stale rejection",
                 },
             }),
             JSON.stringify({
                 id: "msg-hit",
                 from: "host-4",
                 to: "guest-4",
-                message: {
-                    type: "joinResponse",
-                    accepted: true,
-                    playerId: "guest-4",
-                    state: sampleState(),
-                },
+                message: response,
             }),
         ]);
 
         expect(onMessage).toHaveBeenCalledTimes(1);
-        expect(onMessage).toHaveBeenCalledWith(
-            {
-                type: "joinResponse",
-                accepted: true,
-                playerId: "guest-4",
-                state: sampleState(),
-            },
-            "host-4",
-        );
+        expect(onMessage).toHaveBeenCalledWith(response, "host-4");
     });
 
     it("delivers shared state updates to clients", async () => {

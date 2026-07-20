@@ -22,6 +22,7 @@ import { getStablePeerId, loadStablePeerId, resetStablePeerId } from "./lib/peer
 import { PeerManager } from "./lib/peerManager";
 import { compareHands, createShuffledDeck, evaluateHand, formatCard } from "./lib/poker";
 import { navigate, parseRoute, type Route } from "./lib/router";
+import { isCurrentAction, shouldApplyState } from "./lib/syncLogic";
 import type { Card, GameConfig, GameMode, GameState, PeerMessage, Player } from "./lib/types";
 
 let route: Route = $state({ name: "home" });
@@ -203,10 +204,21 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
 
     switch (message.type) {
         case "join": {
+            if (message.peerId !== fromPeerId) {
+                peerManager?.sendToPeer(fromPeerId, {
+                    type: "joinResponse",
+                    requestId: message.requestId,
+                    accepted: false,
+                    message: "Invalid player identity",
+                });
+                return;
+            }
+
             const existing = gameState.players.find((p) => p.id === message.peerId);
             if (existing) {
                 peerManager?.sendToPeer(fromPeerId, {
                     type: "joinResponse",
+                    requestId: message.requestId,
                     accepted: true,
                     playerId: existing.id,
                     state: gameState,
@@ -218,6 +230,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             if (gameState.players.length >= 10) {
                 peerManager?.sendToPeer(fromPeerId, {
                     type: "joinResponse",
+                    requestId: message.requestId,
                     accepted: false,
                     message: "Game is full (max 10 players)",
                 });
@@ -227,6 +240,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             if (gameState.phase !== "waiting") {
                 peerManager?.sendToPeer(fromPeerId, {
                     type: "joinResponse",
+                    requestId: message.requestId,
                     accepted: false,
                     message: "Game already in progress",
                 });
@@ -237,6 +251,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             if (player) {
                 peerManager?.sendToPeer(fromPeerId, {
                     type: "joinResponse",
+                    requestId: message.requestId,
                     accepted: true,
                     playerId: player.id,
                     state: gameState,
@@ -246,6 +261,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             } else {
                 peerManager?.sendToPeer(fromPeerId, {
                     type: "joinResponse",
+                    requestId: message.requestId,
                     accepted: false,
                     message: "Failed to add player",
                 });
@@ -261,7 +277,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
         }
         case "action": {
             if (
-                message.playerId !== fromPeerId ||
+                !isCurrentAction(gameState, message, fromPeerId) ||
                 !applyHostAction(message.playerId, message.action, message.amount)
             ) {
                 peerManager?.sendPrivateToPeer(fromPeerId, { type: "state", state: gameState });
@@ -305,26 +321,16 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
             break;
         }
         case "state": {
-            gameState = message.state;
-            saveGameState(gameState);
-            if (localHoleRound !== gameState.round) localHoleCards = [];
-            if (
-                gameState.config.mode === "digital" &&
-                gameState.phase !== "waiting" &&
-                localHoleRound !== gameState.round
-            ) {
-                scheduleHoleCardRequests(gameState.round);
-            }
+            applyIncomingState(message.state);
             break;
         }
         case "joinResponse": {
             if (message.accepted && message.state && message.playerId) {
-                gameState = message.state;
+                applyIncomingState(message.state);
                 localPlayerId = message.playerId;
                 roomCode = joinCode.trim() || roomCode;
                 isLoading = false;
                 navigate({ name: "room", roomCode });
-                saveGameState(gameState);
                 saveSession({
                     isHost: false,
                     roomCode,
@@ -339,6 +345,24 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
             break;
         }
     }
+}
+
+function applyIncomingState(state: GameState): boolean {
+    if (!shouldApplyState(gameState, state)) {
+        return false;
+    }
+
+    gameState = state;
+    saveGameState(gameState);
+    if (localHoleRound !== gameState.round) localHoleCards = [];
+    if (
+        gameState.config.mode === "digital" &&
+        gameState.phase !== "waiting" &&
+        localHoleRound !== gameState.round
+    ) {
+        scheduleHoleCardRequests(gameState.round);
+    }
+    return true;
 }
 
 function handleConnectionChange(peerId: string, connected: boolean) {
@@ -590,7 +614,10 @@ function performAction(action: "fold" | "check" | "call" | "raise" | "allin") {
     if (hostId) {
         peerManager?.sendToPeer(hostId, {
             type: "action",
+            commandId: crypto.randomUUID(),
             playerId: localPlayerId,
+            round: gameState.round,
+            expectedRevision: gameState.revision,
             action,
             amount,
         });
