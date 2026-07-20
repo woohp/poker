@@ -1,3 +1,5 @@
+import type { GameSnapshot as EngineGameSnapshot } from "./gameEngine";
+
 /**
  * Poker Game Types
  */
@@ -63,7 +65,7 @@ export type PlayerAction = "fold" | "check" | "call" | "raise" | "allin";
 export interface ActionMessage {
     type: "action";
     commandId: string;
-    authorityEpoch: string;
+    epoch: string;
     playerId: string;
     round: number;
     expectedRevision: number;
@@ -90,11 +92,7 @@ export type CommandRejectionReason =
     | "wrong-hand"
     | "wrong-player";
 
-export interface GameSnapshot {
-    authorityEpoch: string;
-    revision: number;
-    state: GameState;
-}
+export type GameSnapshot = EngineGameSnapshot<GameState>;
 
 export interface CommandResultMessage {
     type: "commandResult";

@@ -3,9 +3,9 @@ import { createInitialGameState } from "./gameLogic";
 import { shouldApplyState } from "./syncLogic";
 import type { GameSnapshot } from "./types";
 
-function createSnapshot(revision: number, authorityEpoch = "authority-1"): GameSnapshot {
+function createSnapshot(revision: number, epoch = "authority-1"): GameSnapshot {
     return {
-        authorityEpoch,
+        epoch,
         revision,
         state: createInitialGameState(
             {

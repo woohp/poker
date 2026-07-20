@@ -132,7 +132,7 @@ function sampleState(): GameState {
 
 function sampleSnapshot(revision = 0): GameSnapshot {
     return {
-        authorityEpoch: "authority-test",
+        epoch: "authority-test",
         revision,
         state: sampleState(),
     };
@@ -322,7 +322,7 @@ describe("PeerManager", () => {
                 message: {
                     type: "action",
                     commandId: "command-earlier",
-                    authorityEpoch: "authority-test",
+                    epoch: "authority-test",
                     playerId: "guest-earlier",
                     round: 1,
                     expectedRevision: 1,
@@ -336,7 +336,7 @@ describe("PeerManager", () => {
             {
                 type: "action",
                 commandId: "command-earlier",
-                authorityEpoch: "authority-test",
+                epoch: "authority-test",
                 playerId: "guest-earlier",
                 round: 1,
                 expectedRevision: 1,

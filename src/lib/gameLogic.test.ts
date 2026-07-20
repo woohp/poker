@@ -102,7 +102,7 @@ describe("session and game persistence", () => {
 
     it("saves and loads game state", () => {
         const snapshot = {
-            authorityEpoch: "authority-test",
+            epoch: "authority-test",
             revision: 3,
             state: createState(3),
         };

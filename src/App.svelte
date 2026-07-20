@@ -1,7 +1,7 @@
 <script lang="ts">
 import QRCode from "qrcode";
 import { onDestroy, onMount } from "svelte";
-import { GameAuthority, type AuthorityCommandResult } from "./lib/gameAuthority";
+import { GameEngine } from "./lib/gameEngine";
 import {
     addPlayer,
     advancePhase,
@@ -15,6 +15,13 @@ import {
 } from "./lib/gameLogic";
 import { getStablePeerId, loadStablePeerId, resetStablePeerId } from "./lib/peerIdentity";
 import { PeerManager } from "./lib/peerManager";
+import { PokerGame } from "./lib/pokerGame";
+import {
+    toCommandResultMessage,
+    toEngineCommand,
+    type PokerEngine,
+    type PokerEngineResult,
+} from "./lib/pokerProtocol";
 import {
     clearSession,
     loadGameSnapshot,
@@ -41,7 +48,7 @@ let route: Route = $state({ name: "home" });
 let isLoading = $state(false);
 let isConnectedToGame = $state(false);
 let peerManager: PeerManager | null = $state(null);
-let gameAuthority = new GameAuthority();
+let gameEngine: PokerEngine | null = null;
 let gameSnapshot: GameSnapshot | null = $state(null);
 let gameState: GameState | null = $state(null);
 let playerName = $state("");
@@ -193,10 +200,8 @@ function setGameSnapshot(snapshot: GameSnapshot) {
 }
 
 function publishState(state: GameState, incrementRevision = true) {
-    if (!gameSnapshot) return;
-    const snapshot = incrementRevision
-        ? gameAuthority.commit(gameSnapshot, state)
-        : { ...gameSnapshot, state };
+    if (!gameEngine) return;
+    const snapshot = incrementRevision ? gameEngine.commit(state) : gameEngine.snapshot();
     setGameSnapshot(snapshot);
     peerManager?.broadcastState(snapshot);
     saveGameSnapshot(snapshot);
@@ -214,6 +219,10 @@ async function restoreSession(
 
     try {
         if (savedIsHost) {
+            gameEngine = new GameEngine(new PokerGame(savedSnapshot.state), {
+                epoch: savedSnapshot.epoch,
+                revision: savedSnapshot.revision,
+            });
             restoreDealerState(savedSnapshot.state.round);
             await peerManager.createHost(savedPeerId, savedRoomCode);
             isConnectedToGame = true;
@@ -311,11 +320,14 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             break;
         }
         case "action": {
-            const processed = gameAuthority.processRemote(gameSnapshot, message, fromPeerId);
-            if (processed.result.accepted && !processed.duplicate) {
+            if (!gameEngine) break;
+            const processed = gameEngine.dispatch(toEngineCommand(message, fromPeerId), {
+                actorId: fromPeerId,
+            });
+            if (processed.accepted && !processed.duplicate) {
                 commitProcessedCommand(processed);
             }
-            peerManager?.sendPrivateToPeer(fromPeerId, processed.result);
+            peerManager?.sendPrivateToPeer(fromPeerId, toCommandResultMessage(processed));
             break;
         }
     }
@@ -326,16 +338,26 @@ function applyHostAction(
     action: PlayerAction,
     amount?: number,
 ): boolean {
-    if (!gameSnapshot) return false;
+    if (!gameEngine) return false;
 
-    const processed = gameAuthority.processLocal(gameSnapshot, playerId, action, amount);
-    if (!processed.result.accepted) return false;
+    const snapshot = gameEngine.snapshot();
+    const processed = gameEngine.dispatch(
+        {
+            id: crypto.randomUUID(),
+            actorId: playerId,
+            epoch: snapshot.epoch,
+            expectedRevision: snapshot.revision,
+            payload: { playerId, round: snapshot.state.round, action, amount },
+        },
+        { actorId: playerId },
+    );
+    if (!processed.accepted) return false;
 
     commitProcessedCommand(processed);
     return true;
 }
 
-function commitProcessedCommand(processed: AuthorityCommandResult) {
+function commitProcessedCommand(processed: PokerEngineResult) {
     setGameSnapshot(processed.snapshot);
     publishState(processed.snapshot.state, false);
 
@@ -462,7 +484,6 @@ async function createGame() {
     errorMessage = "";
     isLoading = true;
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
-    gameAuthority = new GameAuthority();
     isHost = true;
 
     try {
@@ -474,11 +495,8 @@ async function createGame() {
 
         const config: GameConfig = { mode: gameMode, startingChips, smallBlind, bigBlind, ante };
         const initialState = createInitialGameState(config, playerName, peerId);
-        setGameSnapshot({
-            authorityEpoch: crypto.randomUUID(),
-            revision: 0,
-            state: initialState,
-        });
+        gameEngine = new GameEngine(new PokerGame(initialState));
+        setGameSnapshot(gameEngine.snapshot());
         publishState(initialState);
         saveSession({ isHost: true, roomCode, playerName });
         isLoading = false;
@@ -689,7 +707,7 @@ function performAction(action: PlayerAction) {
         const message: ActionMessage = {
             type: "action",
             commandId: crypto.randomUUID(),
-            authorityEpoch: gameSnapshot.authorityEpoch,
+            epoch: gameSnapshot.epoch,
             playerId: localPlayerId,
             round: gameState.round,
             expectedRevision: gameSnapshot.revision,
