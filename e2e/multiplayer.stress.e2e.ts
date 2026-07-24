@@ -88,6 +88,7 @@ async function createTable(browser: Browser, playerCount: number): Promise<BotTa
     await host.getByText("Digital cards", { exact: true }).click();
     await host.getByLabel("Starting Chips").fill(String(STARTING_CHIPS));
     await host.getByText("Create Room", { exact: true }).click();
+    await host.waitForURL(/#\/room\//);
     const roomCode = host.url().split("/").at(-1)!;
 
     for (let index = 1; index < pages.length; index++) {

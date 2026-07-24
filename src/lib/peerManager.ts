@@ -1,10 +1,10 @@
 import * as Y from "yjs";
-import { WebtorrentProvider } from "y-webtorrent";
+import { NostrProvider } from "y-nostr";
 import type { GameSnapshot, PeerMessage } from "./types";
 
 type MessageHandler = (message: PeerMessage, fromPeerId: string) => void;
 type ConnectionChangeHandler = (peerId: string, connected: boolean) => void;
-type WebtorrentDoc = ConstructorParameters<typeof WebtorrentProvider>[1];
+type NostrDoc = ConstructorParameters<typeof NostrProvider>[1];
 
 interface MessageEnvelope {
     id: string;
@@ -13,10 +13,9 @@ interface MessageEnvelope {
     message: Exclude<PeerMessage, { type: "state" }>;
 }
 
-const DEFAULT_TRACKER_URLS = ["wss://tracker.openwebtorrent.com", "wss://tracker.webtorrent.dev"];
-const TRACKER_URLS = import.meta.env.VITE_TRACKER_URLS
-    ? import.meta.env.VITE_TRACKER_URLS.split(",").map((url: string) => url.trim())
-    : DEFAULT_TRACKER_URLS;
+const RELAY_URLS = import.meta.env.VITE_RELAY_URLS
+    ? import.meta.env.VITE_RELAY_URLS.split(",").map((url: string) => url.trim())
+    : null;
 const WEBRTC_DEBUG_STORAGE_KEY = "poker-webrtc-debug";
 const RTC_CONFIG: RTCConfiguration = {
     iceServers: [
@@ -34,7 +33,7 @@ export function generatePeerId(length = 20): string {
 }
 
 export class PeerManager {
-    private provider: WebtorrentProvider | null = null;
+    private provider: NostrProvider | null = null;
     private doc: Y.Doc | null = null;
     private messages: Y.Array<string> | null = null;
     private stateMap: Y.Map<string> | null = null;
@@ -45,6 +44,7 @@ export class PeerManager {
     private isHost = false;
     private processedMessageIds: Set<string> = new Set();
     private connectedPeerIds: Set<string> = new Set();
+    private transportPeerIds = new Map<string, string>();
     private pendingJoinRequestId: string | null = null;
     private readonly debugEnabled = isWebrtcDebugEnabled();
     private debugStartedAt = 0;
@@ -89,7 +89,7 @@ export class PeerManager {
     private async initializeProvider(): Promise<void> {
         this.disconnect();
         this.debugStartedAt = performance.now();
-        this.logDebug("provider-start", { trackers: TRACKER_URLS });
+        this.logDebug("provider-start", { relays: RELAY_URLS ?? "room defaults" });
 
         this.doc = new Y.Doc();
         this.messages = this.doc.getArray<string>("messages");
@@ -119,34 +119,33 @@ export class PeerManager {
             }
         });
 
-        this.provider = new WebtorrentProvider(
-            this.roomCode,
-            this.doc as unknown as WebtorrentDoc,
-            {
-                trackers: TRACKER_URLS,
-                peerId: this.localPeerId,
-                rtcConfig: RTC_CONFIG,
-                debug: this.debugEnabled,
-            },
-        );
+        this.provider = new NostrProvider(this.roomCode, this.doc as unknown as NostrDoc, {
+            ...(RELAY_URLS ? { relays: RELAY_URLS } : {}),
+            rtcConfig: RTC_CONFIG,
+            debug: this.debugEnabled,
+        });
 
         this.provider.on("direct-message", (peerId: unknown, payload: unknown) => {
             if (typeof peerId !== "string" || !(payload instanceof Uint8Array)) return;
             try {
                 const message = JSON.parse(new TextDecoder().decode(payload)) as PeerMessage;
-                this.onMessage(message, peerId);
+                this.onMessage(message, this.getLogicalPeerId(peerId));
             } catch (error) {
                 console.error("Failed to parse private peer message:", error);
             }
         });
 
-        this.provider.awareness.setLocalState({ peerId: this.localPeerId });
+        this.provider.awareness.setLocalState({
+            peerId: this.localPeerId,
+            transportPeerId: this.provider.peerId,
+        });
         this.provider.awareness.on("change", () => {
+            this.updateTransportPeerIds();
             this.handlePeerList(this.getAwarenessPeerIds());
         });
 
         this.provider.on("status", (status: unknown) => {
-            this.logDebug("tracker-status", status);
+            this.logDebug("relay-status", status);
         });
 
         this.provider.on("debug", (event: unknown) => {
@@ -155,12 +154,12 @@ export class PeerManager {
 
         this.provider.on("connection-error", (error: unknown) => {
             this.logDebug("connection-error", formatError(error));
-            console.error("Webtorrent connection error:", error);
+            console.error("Nostr connection error:", error);
         });
 
         this.provider.on("peer-error", (error: unknown) => {
             this.logDebug("peer-error", formatError(error));
-            console.error("Webtorrent peer error:", error);
+            console.error("Nostr peer error:", error);
         });
 
         await this.provider.ready;
@@ -224,6 +223,26 @@ export class PeerManager {
             );
     }
 
+    private updateTransportPeerIds(): void {
+        if (!this.provider) return;
+
+        this.transportPeerIds.clear();
+        for (const state of this.provider.awareness.getStates().values()) {
+            const peerId = state["peerId"];
+            const transportPeerId = state["transportPeerId"];
+            if (typeof peerId === "string" && typeof transportPeerId === "string") {
+                this.transportPeerIds.set(peerId, transportPeerId);
+            }
+        }
+    }
+
+    private getLogicalPeerId(transportPeerId: string): string {
+        for (const [peerId, candidate] of this.transportPeerIds) {
+            if (candidate === transportPeerId) return peerId;
+        }
+        return transportPeerId;
+    }
+
     private handlePeerList(peerIds: string[]): void {
         const nextPeerIds = new Set(peerIds);
 
@@ -244,7 +263,8 @@ export class PeerManager {
 
     sendPrivateToPeer(peerId: string, message: PeerMessage): boolean {
         const payload = new TextEncoder().encode(JSON.stringify(message));
-        return this.provider?.sendToPeer(peerId, payload) || false;
+        const transportPeerId = this.transportPeerIds.get(peerId);
+        return !!transportPeerId && !!this.provider?.sendToPeer(transportPeerId, payload);
     }
 
     sendToPeer(peerId: string, message: Exclude<PeerMessage, { type: "state" }>): void {
@@ -306,6 +326,7 @@ export class PeerManager {
         this.stateMap = null;
         this.processedMessageIds.clear();
         this.connectedPeerIds.clear();
+        this.transportPeerIds.clear();
         this.pendingJoinRequestId = null;
     }
 }

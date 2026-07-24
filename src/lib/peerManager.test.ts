@@ -5,7 +5,7 @@ import type { GameSnapshot, GameState, PeerMessage } from "./types";
 interface MockProviderInstance {
     roomName: string;
     doc: Y.Doc;
-    opts: { peerId?: string; rtcConfig?: RTCConfiguration };
+    opts: { relays?: string[]; rtcConfig?: RTCConfiguration };
     handlers: Map<string, Array<(...payload: unknown[]) => void>>;
     awareness: MockAwareness;
     peers: Map<string, never>;
@@ -29,7 +29,12 @@ class MockAwareness {
 
     setRemotePeerIds(peerIds: string[]): void {
         const localState = this.states.get(1);
-        this.states = new Map(peerIds.map((peerId, index) => [index + 2, { peerId }]));
+        this.states = new Map(
+            peerIds.map((peerId, index) => [
+                index + 2,
+                { peerId, transportPeerId: `transport-${peerId}` },
+            ]),
+        );
         if (localState) this.states.set(1, localState);
         this.emitChange();
     }
@@ -47,18 +52,19 @@ class MockAwareness {
     }
 }
 
-const webtorrentMock = vi.hoisted(() => ({
+const nostrMock = vi.hoisted(() => ({
     instances: [] as MockProviderInstance[],
 }));
 
-vi.mock("y-webtorrent", async () => {
-    class MockWebtorrentProvider {
+vi.mock("y-nostr", async () => {
+    class MockNostrProvider {
         roomName: string;
         doc: Y.Doc;
-        opts: { peerId?: string; rtcConfig?: RTCConfiguration };
+        opts: { relays?: string[]; rtcConfig?: RTCConfiguration };
         handlers = new Map<string, Array<(...payload: unknown[]) => void>>();
         awareness = new MockAwareness();
         peers = new Map<string, never>();
+        peerId = "local-transport-peer";
         sentDirectMessages: Array<{ peerId: string; payload: Uint8Array }> = [];
         destroyed = false;
         ready = Promise.resolve();
@@ -66,12 +72,12 @@ vi.mock("y-webtorrent", async () => {
         constructor(
             roomName: string,
             doc: Y.Doc,
-            opts: { peerId?: string; rtcConfig?: RTCConfiguration },
+            opts: { relays?: string[]; rtcConfig?: RTCConfiguration },
         ) {
             this.roomName = roomName;
             this.doc = doc;
             this.opts = opts;
-            webtorrentMock.instances.push(this as MockProviderInstance);
+            nostrMock.instances.push(this as MockProviderInstance);
         }
 
         on(event: string, handler: (...payload: unknown[]) => void) {
@@ -97,7 +103,7 @@ vi.mock("y-webtorrent", async () => {
     }
 
     return {
-        WebtorrentProvider: MockWebtorrentProvider,
+        NostrProvider: MockNostrProvider,
     };
 });
 
@@ -139,7 +145,7 @@ function sampleSnapshot(revision = 0): GameSnapshot {
 
 describe("PeerManager", () => {
     beforeEach(() => {
-        webtorrentMock.instances.length = 0;
+        nostrMock.instances.length = 0;
     });
 
     it("creates a host with the provided peer id and room code", async () => {
@@ -149,13 +155,13 @@ describe("PeerManager", () => {
         );
 
         const peerId = await peerManager.createHost("host-1", "room-1");
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
 
         expect(peerId).toBe("host-1");
         expect(peerManager.getLocalPeerId()).toBe("host-1");
         expect(peerManager.getRoomCode()).toBe("room-1");
         expect(provider.roomName).toBe("room-1");
-        expect(provider.opts.peerId).toBe("host-1");
+        expect(provider.opts.relays).toBeUndefined();
         expect(provider.opts.rtcConfig?.iceServers).toEqual([
             { urls: "stun:stun.l.google.com:19302" },
             { urls: "stun:stun.cloudflare.com:3478" },
@@ -169,7 +175,7 @@ describe("PeerManager", () => {
         );
 
         const peerId = await peerManager.joinGame("room-2", "Alice", "guest-1");
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
         const message = parseLastMessage(provider.doc) as {
             from: string;
             to: string | null;
@@ -195,7 +201,7 @@ describe("PeerManager", () => {
         );
         await peerManager.createHost("host-2", "room-3");
 
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
         const snapshot = sampleSnapshot();
 
         peerManager.sendToPeer("guest-2", {
@@ -228,7 +234,7 @@ describe("PeerManager", () => {
         );
         await peerManager.createHost("host-direct", "room-direct");
 
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
         provider.awareness.setRemotePeerIds(["peer-a", "peer-b"]);
         const snapshot = sampleSnapshot();
         snapshot.state.pot = 75;
@@ -243,8 +249,8 @@ describe("PeerManager", () => {
                 message: JSON.parse(new TextDecoder().decode(payload)) as PeerMessage,
             })),
         ).toEqual([
-            { peerId: "peer-a", message: { type: "state", snapshot } },
-            { peerId: "peer-b", message: { type: "state", snapshot } },
+            { peerId: "transport-peer-a", message: { type: "state", snapshot } },
+            { peerId: "transport-peer-b", message: { type: "state", snapshot } },
         ]);
     });
 
@@ -258,7 +264,7 @@ describe("PeerManager", () => {
         );
         await peerManager.joinGame("room-state-order", "Guest", "guest-state-order");
 
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
         const olderState = sampleSnapshot(1);
         olderState.state.pot = 10;
         const newerState = sampleSnapshot(2);
@@ -276,7 +282,7 @@ describe("PeerManager", () => {
         const peerManager = new PeerManager(onMessage, () => {});
         await peerManager.createHost("host-3", "room-4");
 
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
         provider.doc.getArray<string>("messages").push([
             JSON.stringify({
                 id: "msg-1",
@@ -307,7 +313,7 @@ describe("PeerManager", () => {
         const peerManager = new PeerManager(onMessage, () => {});
         await peerManager.createHost("host-ordered", "room-ordered");
 
-        const messages = webtorrentMock.instances[0]!.doc.getArray<string>("messages");
+        const messages = nostrMock.instances[0]!.doc.getArray<string>("messages");
         messages.push([
             JSON.stringify({
                 id: "msg-later",
@@ -356,7 +362,7 @@ describe("PeerManager", () => {
         const peerManager = new PeerManager(onMessage, () => {});
         await peerManager.joinGame("room-5", "Cara", "guest-4");
 
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
         const joinEnvelope = parseLastMessage(provider.doc) as {
             message: { type: "join"; requestId: string };
         };
@@ -396,7 +402,7 @@ describe("PeerManager", () => {
         const peerManager = new PeerManager(onMessage, () => {});
         await peerManager.joinGame("room-6", "Dana", "guest-5");
 
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
         const snapshot = sampleSnapshot();
         snapshot.state.pot = 55;
 
@@ -410,7 +416,7 @@ describe("PeerManager", () => {
         const peerManager = new PeerManager(() => {}, onConnectionChange);
         await peerManager.createHost("host-5", "room-7");
 
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
         provider.awareness.setRemotePeerIds(["peer-a", "peer-b"]);
         provider.awareness.setRemotePeerIds(["peer-b", "peer-c"]);
 
@@ -429,7 +435,7 @@ describe("PeerManager", () => {
         );
         await peerManager.createHost("host-6", "room-8");
 
-        const provider = webtorrentMock.instances[0]!;
+        const provider = nostrMock.instances[0]!;
         peerManager.disconnect();
         peerManager.disconnect();
 

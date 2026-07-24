@@ -11,7 +11,7 @@ export default defineConfig({
     },
     webServer: [
         {
-            command: "npm run e2e:tracker",
+            command: "npm run e2e:relay",
             port: 8000,
             reuseExistingServer: !process.env.CI,
         },

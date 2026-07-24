@@ -190,6 +190,6 @@ The root `README.md` is still a starter document. Replacing it with detailed pro
 
 ## Dependencies
 
-- `y-webtorrent` - WebRTC peer discovery/signaling + Yjs sync
+- `y-nostr` - Nostr relay discovery/signaling + WebRTC/Yjs sync
 - `yjs` - Shared CRDT state
 - `qrcode` - QR code generation

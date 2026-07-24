@@ -13,14 +13,13 @@
         "test": "vp test run",
         "test:e2e": "playwright test",
         "test:stress": "POKER_STRESS=1 playwright test e2e/multiplayer.stress.e2e.ts --workers=1",
-        "e2e:app": "VITE_TRACKER_URLS=ws://127.0.0.1:8000 VITE_PHASE_ADVANCE_DELAY_MS=25 vp dev --host 127.0.0.1 --port 4173",
-        "e2e:tracker": "tsx node_modules/wt-tracker/src/run-tracker.ts e2e/tracker.config.json",
-        "postinstall": "patch-package"
+        "e2e:app": "VITE_RELAY_URLS=ws://127.0.0.1:8000 VITE_PHASE_ADVANCE_DELAY_MS=25 vp dev --host 127.0.0.1 --port 4173",
+        "e2e:relay": "tsx e2e/nostrRelay.ts"
     },
     "dependencies": {
         "@tailwindcss/vite": "^4.3.3",
         "qrcode": "^1.5.4",
-        "y-webtorrent": "github:woohp/y-webtorrent",
+        "y-nostr": "github:woohp/y-nostr",
         "yjs": "^13.6.31"
     },
     "devDependencies": {
@@ -29,17 +28,16 @@
         "@tsconfig/svelte": "^5.0.8",
         "@types/node": "^26.1.1",
         "@types/qrcode": "^1.5.6",
-        "patch-package": "^8.0.1",
+        "@types/ws": "^8.18.1",
         "svelte": "^5.56.7",
         "svelte-check-native": "^1.1.2",
         "tailwindcss": "^4.3.3",
         "tsx": "^4.23.1",
         "typescript": "^7.0.2",
-        "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.69.0",
         "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5",
         "vite-plus": "0.2.5",
         "vitest": "^4.1.10",
-        "wt-tracker": "github:Novage/wt-tracker"
+        "ws": "^8.21.1"
     },
     "overrides": {
         "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5"
@@ -47,6 +45,6 @@
     "packageManager": "npm@12.0.1",
     "allowScripts": {
         "webrtc-data-peer@0.1.0": true,
-        "y-webtorrent@0.1.0": true
+        "y-nostr@0.1.0": true
     }
 }

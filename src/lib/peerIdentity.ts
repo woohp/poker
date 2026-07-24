@@ -1,5 +1,3 @@
-import { createPeerId } from "y-webtorrent";
-
 const PEER_ID_STORAGE_KEY = "poker-peer-id";
 const PEER_ID_LENGTH = 20;
 
@@ -22,9 +20,15 @@ export function getStablePeerId(): string {
 }
 
 export function resetStablePeerId(): string {
-    const peerId = createPeerId();
+    const peerId = randomPeerId();
     sessionStorage.setItem(PEER_ID_STORAGE_KEY, encodePeerId(peerId));
     return peerId;
+}
+
+function randomPeerId(): string {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    const bytes = crypto.getRandomValues(new Uint8Array(PEER_ID_LENGTH));
+    return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
 }
 
 function encodePeerId(peerId: string): string {

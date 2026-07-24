@@ -30,6 +30,7 @@ async function joinGame(browser: Browser, digital = false, installStorageFailure
     await host.getByText("Create Game", { exact: true }).click();
     if (digital) await host.getByText("Digital cards", { exact: true }).click();
     await host.getByText("Create Room", { exact: true }).click();
+    await host.waitForURL(/#\/room\//);
 
     const roomCode = host.url().split("/").at(-1);
     expect(roomCode).toBeTruthy();
@@ -189,6 +190,7 @@ test("four players can act in turn", async ({ browser }) => {
         await host!.getByLabel("Your name").fill("First");
         await host!.getByText("Create Game", { exact: true }).click();
         await host!.getByText("Create Room", { exact: true }).click();
+        await host!.waitForURL(/#\/room\//);
         const roomCode = host!.url().split("/").at(-1);
         expect(roomCode).toBeTruthy();
 
@@ -277,6 +279,7 @@ test("digital hole cards arrive from a Chromium host to a Firefox guest", async 
     await host.getByText("Create Game", { exact: true }).click();
     await host.getByText("Digital cards", { exact: true }).click();
     await host.getByText("Create Room", { exact: true }).click();
+    await host.waitForURL(/#\/room\//);
 
     const roomCode = host.url().split("/").at(-1);
     await guest.goto(`./#/join/${roomCode}`);
