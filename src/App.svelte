@@ -1298,7 +1298,7 @@ function nextPhase() {
                             <div class="flex gap-2 justify-center mb-6 min-h-16">
                                 {#if gameState.config.mode === "digital"}
                                     {#each gameState.communityCards as card}
-                                        <div class={`w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-xl md:text-3xl font-black shadow-md ring-1 ring-black/5 ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
+                                        <div class={`w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-xl md:text-3xl font-serif font-black shadow-md ring-1 ring-black/5 ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
                                     {/each}
                                 {:else}
                                     {#each Array(gameState.phase === "flop" ? 3 : gameState.phase === "turn" ? 4 : gameState.phase === "river" || gameState.phase === "showdown" ? 5 : 0) as _}
@@ -1312,7 +1312,7 @@ function nextPhase() {
                                     <span class="text-xs uppercase tracking-[0.18em] text-white/75 font-bold mb-2">Your hand</span>
                                     <div class="flex gap-2">
                                         {#each localHoleCards as card}
-                                            <div class={`w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-xl md:text-3xl font-black shadow-lg ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
+                                            <div class={`w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-xl md:text-3xl font-serif font-black shadow-lg ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
                                         {/each}
                                     </div>
                                 </div>
