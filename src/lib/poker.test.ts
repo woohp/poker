@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { compareHands, createShuffledDeck, evaluateHand } from "./poker";
+import { compareHands, createShuffledDeck, evaluateHand, formatCard } from "./poker";
 import type { Card } from "./types";
 
 function cards(value: string): Card[] {
@@ -11,6 +11,11 @@ describe("digital poker cards", () => {
         const deck = createShuffledDeck();
         expect(deck).toHaveLength(52);
         expect(new Set(deck)).toHaveLength(52);
+    });
+
+    it("formats tens with the familiar two-digit rank", () => {
+        expect(formatCard("Th")).toBe("10♥");
+        expect(formatCard("As")).toBe("A♠");
     });
 
     it("recognizes major hand categories", () => {

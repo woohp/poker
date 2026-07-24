@@ -39,7 +39,8 @@ export function compareHands(left: Card[], right: Card[]): number {
 
 export function formatCard(card: Card): string {
     const suits: Record<string, string> = { c: "♣", d: "♦", h: "♥", s: "♠" };
-    return `${card[0]}${suits[card[1]!]}`;
+    const rank = card[0] === "T" ? "10" : card[0];
+    return `${rank}${suits[card[1]!]}`;
 }
 
 function evaluateFive(cards: Card[]): HandResult {
