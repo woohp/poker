@@ -69,7 +69,7 @@ let gameMode: GameMode = $state("physical");
 
 let isHost = $state(false);
 let localPlayerId = $state("");
-let raiseAmount = $state(0);
+let raiseAmount = $state<number | undefined>(undefined);
 let copySuccess = $state(false);
 let showdownSelections: Record<number, string[]> = $state({});
 let autoCheckRequested = $state(false);
@@ -869,7 +869,9 @@ function performAction(action: PlayerAction) {
     const amount = action === "raise" ? raiseAmount : undefined;
 
     if (isHost) {
-        applyHostAction(localPlayerId, action, amount);
+        if (applyHostAction(localPlayerId, action, amount) && action === "raise") {
+            raiseAmount = undefined;
+        }
         return;
     }
 
@@ -887,6 +889,7 @@ function performAction(action: PlayerAction) {
         pendingCommand = { message, targetRevision: null };
         peerManager?.sendToPeer(hostId, message);
         scheduleCommandRetry(hostId, message);
+        if (action === "raise") raiseAmount = undefined;
     }
 }
 
@@ -1442,9 +1445,12 @@ function nextPhase() {
                                             <div class="mt-2">
                                                 <input 
                                                     type="number" 
+                                                    inputmode="numeric"
+                                                    pattern="[0-9]*"
                                                     bind:value={raiseAmount}
                                                     min={calculateMinRaise()}
                                                     max={(getMyPlayer()?.chips || 0) + (getMyPlayer()?.currentBet || 0)}
+                                                    step="1"
                                                     placeholder="Raise amount"
                                                     disabled={pendingCommand !== null}
                                                     class="px-4 py-2.5 border-2 border-white/70 rounded-xl w-36 bg-white/95 text-slate-900 placeholder:text-slate-400 font-semibold shadow-sm disabled:opacity-60"
