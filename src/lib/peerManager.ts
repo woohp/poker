@@ -17,6 +17,7 @@ const DEFAULT_TRACKER_URLS = ["wss://tracker.openwebtorrent.com", "wss://tracker
 const TRACKER_URLS = import.meta.env.VITE_TRACKER_URLS
     ? import.meta.env.VITE_TRACKER_URLS.split(",").map((url: string) => url.trim())
     : DEFAULT_TRACKER_URLS;
+const WEBRTC_DEBUG_STORAGE_KEY = "poker-webrtc-debug";
 const RTC_CONFIG: RTCConfiguration = {
     iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
@@ -45,6 +46,8 @@ export class PeerManager {
     private processedMessageIds: Set<string> = new Set();
     private connectedPeerIds: Set<string> = new Set();
     private pendingJoinRequestId: string | null = null;
+    private readonly debugEnabled = isWebrtcDebugEnabled();
+    private debugStartedAt = 0;
 
     constructor(onMessage: MessageHandler, onConnectionChange: ConnectionChangeHandler) {
         this.onMessage = onMessage;
@@ -85,6 +88,8 @@ export class PeerManager {
 
     private async initializeProvider(): Promise<void> {
         this.disconnect();
+        this.debugStartedAt = performance.now();
+        this.logDebug("provider-start", { trackers: TRACKER_URLS });
 
         this.doc = new Y.Doc();
         this.messages = this.doc.getArray<string>("messages");
@@ -121,6 +126,7 @@ export class PeerManager {
                 trackers: TRACKER_URLS,
                 peerId: this.localPeerId,
                 rtcConfig: RTC_CONFIG,
+                debug: this.debugEnabled,
             },
         );
 
@@ -139,15 +145,31 @@ export class PeerManager {
             this.handlePeerList(this.getAwarenessPeerIds());
         });
 
+        this.provider.on("status", (status: unknown) => {
+            this.logDebug("tracker-status", status);
+        });
+
+        this.provider.on("debug", (event: unknown) => {
+            this.logDebug("provider", event);
+        });
+
         this.provider.on("connection-error", (error: unknown) => {
+            this.logDebug("connection-error", formatError(error));
             console.error("Webtorrent connection error:", error);
         });
 
         this.provider.on("peer-error", (error: unknown) => {
+            this.logDebug("peer-error", formatError(error));
             console.error("Webtorrent peer error:", error);
         });
 
         await this.provider.ready;
+    }
+
+    private logDebug(event: string, details: unknown): void {
+        if (!this.debugEnabled) return;
+        const elapsedMs = Math.round(performance.now() - this.debugStartedAt);
+        console.debug(`[WebRTC +${elapsedMs}ms] ${event}`, details);
     }
 
     private handleMessageUpdates(): void {
@@ -286,6 +308,30 @@ export class PeerManager {
         this.connectedPeerIds.clear();
         this.pendingJoinRequestId = null;
     }
+}
+
+function isWebrtcDebugEnabled(): boolean {
+    if (typeof window === "undefined") return false;
+
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("debugWebrtc") === "1") {
+            localStorage.setItem(WEBRTC_DEBUG_STORAGE_KEY, "1");
+            return true;
+        }
+        if (params.get("debugWebrtc") === "0") {
+            localStorage.removeItem(WEBRTC_DEBUG_STORAGE_KEY);
+            return false;
+        }
+        return localStorage.getItem(WEBRTC_DEBUG_STORAGE_KEY) === "1";
+    } catch {
+        return false;
+    }
+}
+
+function formatError(error: unknown): unknown {
+    if (!(error instanceof Error)) return error;
+    return { name: error.name, message: error.message, stack: error.stack };
 }
 
 function randomId(length: number): string {
