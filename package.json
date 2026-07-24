@@ -19,7 +19,7 @@
     "dependencies": {
         "@tailwindcss/vite": "^4.3.3",
         "qrcode": "^1.5.4",
-        "y-nostr": "github:woohp/y-nostr",
+        "y-nostr": "git+https://github.com/woohp/y-nostr.git",
         "yjs": "^13.6.31"
     },
     "devDependencies": {
