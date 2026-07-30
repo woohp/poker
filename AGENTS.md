@@ -190,6 +190,6 @@ The root `README.md` is still a starter document. Replacing it with detailed pro
 
 ## Dependencies
 
-- `y-nostr` - Nostr relay discovery/signaling + WebRTC/Yjs sync
+- `y-nostr` and `y-webtorrent` - Redundant signaling transports coordinated by `MultiProvider`
 - `yjs` - Shared CRDT state
 - `qrcode` - QR code generation

@@ -20,6 +20,8 @@
         "@tailwindcss/vite": "^4.3.3",
         "qrcode": "^1.5.4",
         "y-nostr": "git+https://github.com/woohp/y-nostr.git",
+        "y-protocols": "^1.0.7",
+        "y-webtorrent": "git+https://github.com/woohp/y-webtorrent.git",
         "yjs": "^13.6.31"
     },
     "devDependencies": {
@@ -45,6 +47,7 @@
     "packageManager": "npm@12.0.1",
     "allowScripts": {
         "webrtc-data-peer@0.1.0": true,
-        "y-nostr@0.1.0": true
+        "y-nostr@0.1.0": true,
+        "y-webtorrent@0.1.0": true
     }
 }
