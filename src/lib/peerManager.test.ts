@@ -51,7 +51,7 @@ const multiProviderMock = vi.hoisted(() => ({
     instances: [] as MockProviderInstance[],
 }));
 
-vi.mock("./multiProvider", async () => {
+vi.mock("y-multiprovider", async () => {
     class MockMultiProvider {
         roomName: string;
         doc: Y.Doc;

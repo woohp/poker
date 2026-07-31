@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { NostrProvider } from "y-nostr";
 import { createPeerId, WebtorrentProvider } from "y-webtorrent";
-import { MultiProvider } from "./multiProvider";
+import { MultiProvider } from "y-multiprovider";
 import type { GameSnapshot, PeerMessage } from "./types";
 
 type MessageHandler = (message: PeerMessage, fromPeerId: string) => void;
