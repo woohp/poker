@@ -1481,7 +1481,7 @@ function nextPhase() {
                                             </button>
                                         {/if}
                                         {#if canPerformAction("raise")}
-                                            <button data-action="raise" disabled={pendingCommand !== null} class="py-2 px-4 bg-purple-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("raise")}>
+                                            <button data-action="raise" disabled={pendingCommand !== null || raiseAmount === undefined} class="py-2 px-4 bg-purple-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("raise")}>
                                                 Raise
                                             </button>
                                         {/if}
