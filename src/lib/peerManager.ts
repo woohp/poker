@@ -46,7 +46,6 @@ export class PeerManager {
     private roomCode = "";
     private isHost = false;
     private processedMessageIds: Set<string> = new Set();
-    private connectedPeerIds: Set<string> = new Set();
     private pendingJoinRequestId: string | null = null;
     private readonly debugEnabled = isWebrtcDebugEnabled();
     private debugStartedAt = 0;
@@ -100,7 +99,6 @@ export class PeerManager {
         this.messages = this.doc.getArray<string>("messages");
         this.stateMap = this.doc.getMap<string>("state");
         this.processedMessageIds.clear();
-        this.connectedPeerIds.clear();
 
         this.messages.observe(() => {
             this.handleMessageUpdates();
@@ -161,8 +159,8 @@ export class PeerManager {
         });
 
         this.provider.awareness.setLocalState({ peerId: this.localPeerId });
-        this.provider.awareness.on("change", () => {
-            this.handlePeerList(this.getAwarenessPeerIds());
+        this.provider.on("peer-change", ({ peerId, connected }) => {
+            this.onConnectionChange(peerId, connected);
         });
 
         this.provider.on("status", (status: unknown) => {
@@ -244,24 +242,6 @@ export class PeerManager {
             );
     }
 
-    private handlePeerList(peerIds: string[]): void {
-        const nextPeerIds = new Set(peerIds);
-
-        for (const peerId of nextPeerIds) {
-            if (!this.connectedPeerIds.has(peerId)) {
-                this.onConnectionChange(peerId, true);
-            }
-        }
-
-        for (const peerId of this.connectedPeerIds) {
-            if (!nextPeerIds.has(peerId)) {
-                this.onConnectionChange(peerId, false);
-            }
-        }
-
-        this.connectedPeerIds = nextPeerIds;
-    }
-
     sendPrivateToPeer(peerId: string, message: PeerMessage): boolean {
         const payload = new TextEncoder().encode(JSON.stringify(message));
         return this.provider?.sendToPeer(peerId, payload) || false;
@@ -325,7 +305,6 @@ export class PeerManager {
         this.messages = null;
         this.stateMap = null;
         this.processedMessageIds.clear();
-        this.connectedPeerIds.clear();
         this.pendingJoinRequestId = null;
     }
 }
