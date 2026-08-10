@@ -397,14 +397,32 @@ describe("PeerManager", () => {
         expect(onMessage).toHaveBeenCalledWith({ type: "state", snapshot }, "host");
     });
 
-    it("emits peer connect and disconnect changes from awareness", async () => {
+    it("emits aggregate logical peer connect and disconnect changes", async () => {
         const onConnectionChange = vi.fn();
         const peerManager = new PeerManager(() => {}, onConnectionChange);
         await peerManager.createHost("host-5", "room-7");
 
         const provider = multiProviderMock.instances[0]!;
-        provider.awareness.setRemotePeerIds(["peer-a", "peer-b"]);
-        provider.awareness.setRemotePeerIds(["peer-b", "peer-c"]);
+        provider.emit("peer-change", {
+            peerId: "peer-a",
+            connected: true,
+            transports: ["nostr"],
+        });
+        provider.emit("peer-change", {
+            peerId: "peer-b",
+            connected: true,
+            transports: ["nostr", "webtorrent"],
+        });
+        provider.emit("peer-change", {
+            peerId: "peer-c",
+            connected: true,
+            transports: ["webtorrent"],
+        });
+        provider.emit("peer-change", {
+            peerId: "peer-a",
+            connected: false,
+            transports: [],
+        });
 
         expect(onConnectionChange.mock.calls).toEqual([
             ["peer-a", true],
