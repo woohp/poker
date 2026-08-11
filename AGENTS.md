@@ -37,7 +37,7 @@ npm run test:cross-network -- <ssh-host> [attempts]
 
 **Note:** Unit tests are run with Vite+ test (`vite-plus/test`).
 
-The durable home-network/cellular harness is under `e2e/cross-network/`; read its README before running it. It uses persistent SSH multiplexing, records per-provider connection timing, and requires both Nostr and WebTorrent to connect.
+The durable home-network/cellular harness is under `e2e/cross-network/`; read its README before running it. It documents both deployed-app and matching-local-server workflows, including remote setup. The harness uses persistent SSH multiplexing, records per-provider connection timing, and requires both Nostr and WebTorrent to connect.
 
 ## Tech Stack
 
