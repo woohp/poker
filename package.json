@@ -13,6 +13,7 @@
         "test": "vp test run",
         "test:e2e": "playwright test",
         "test:stress": "POKER_STRESS=1 playwright test e2e/multiplayer.stress.e2e.ts --workers=1",
+        "test:cross-network": "node e2e/cross-network/run.mjs",
         "e2e:app": "VITE_RELAY_URLS=ws://127.0.0.1:8000 VITE_PHASE_ADVANCE_DELAY_MS=25 vp dev --host 127.0.0.1 --port 4173",
         "e2e:relay": "tsx e2e/nostrRelay.ts"
     },

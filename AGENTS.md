@@ -29,9 +29,15 @@ npm run test:e2e
 
 # Deterministic 100-hand multiplayer stress test
 npm run test:stress
+
+
+# Real cross-network test (remote Firefox must be on another network)
+npm run test:cross-network -- <ssh-host> [attempts]
 ```
 
 **Note:** Unit tests are run with Vite+ test (`vite-plus/test`).
+
+The durable home-network/cellular harness is under `e2e/cross-network/`; read its README before running it. It uses persistent SSH multiplexing, records per-provider connection timing, and requires both Nostr and WebTorrent to connect.
 
 ## Tech Stack
 
@@ -182,6 +188,7 @@ let doubled = $derived(count * 2);
 3. Run `npm run lint` - no linting errors
 4. Run `npm test` - unit tests pass
 5. Run relevant E2E tests; use `npm run test:stress` for synchronization/state-engine changes
+    - For signaling/NAT changes, run `npm run test:cross-network -- <ssh-host>` with the remote browser on a genuinely different network.
 6. Verify `npm run build` succeeds
 
 ## Documentation
