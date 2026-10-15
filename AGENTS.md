@@ -1,202 +1,58 @@
-# AGENTS.md - Coding Guidelines for Poker
+# Poker agent guide
 
-## Build/Lint/Test Commands
+Poker is a browser-only Svelte 5 app for running a casual poker table among friends. One player's browser hosts the authoritative game; other players connect peer-to-peer over Yjs/WebRTC (Nostr and WebTorrent signaling via `y-multiprovider`). There is no server. Tables use physical cards (the app tracks chips, blinds, and pots) or digital cards (the host also deals).
 
-```bash
-# Development server
-npm run dev
+## Scope and trust model
 
-# Production build
-npm run build
+Anyone with the room code is a trusted participant. Host authority provides consistent coordination, not cryptographic security or cheat resistance. Do not add signatures, public-key identities, or adversarial transport hardening unless public rooms, matchmaking, stakes, or untrusted participants become product goals. Keep basic sender consistency checks and input validation where they prevent accidental corruption; a sender ID inside the shared Yjs document is a consistency field, not verified identity.
 
-# Preview production build
-npm run preview
+Favor simple solutions for that scope. Do not add machinery for rare local races (timers versus disconnects, refresh during a transient network blip) unless a concrete recurring failure justifies it.
 
-# Type checking / verification (MUST run after changes)
-npm run check
+The root `README.md` is still the Vite starter. Replacing it is deliberately deferred until setup, gameplay assumptions, recovery behavior, and limitations stabilize.
 
-# Linting (Vite+ / oxlint)
-npm run lint
+## Architecture boundaries
 
-# Formatting (Vite+ / oxfmt)
-npm run format
-
-# Unit tests
-npm test
-
-# Playwright multiplayer tests
-npm run test:e2e
-
-# Deterministic 100-hand multiplayer stress test
-npm run test:stress
-
-
-# Real cross-network test (remote Firefox must be on another network)
-npm run test:cross-network -- <ssh-host> [attempts]
-```
-
-**Note:** Unit tests are run with Vite+ test (`vite-plus/test`).
-
-The durable home-network/cellular harness is under `e2e/cross-network/`; read its README before running it. It documents both deployed-app and matching-local-server workflows, including remote setup. The harness uses persistent SSH multiplexing, records per-provider connection timing, and requires both Nostr and WebTorrent to connect.
-
-## Tech Stack
-
-- **Framework:** Svelte 5 with runes ($state, $derived, etc.)
-- **Build Tool:** Vite+ (Vite-based)
-- **Language:** TypeScript (strict)
-- **Package Manager:** npm
-- **Linting/Formatting:** Vite+ with oxlint / oxfmt
-
-## High-Level Architecture
-
-The host is authoritative. Clients send versioned commands to the host and render replicated snapshots; they do not apply poker actions locally.
-
-### Trust Model
-
-This is currently a casual, trusted-room app. Anyone with the room code is treated as a trusted participant; host authority provides consistent game coordination, not cryptographic security or cheat resistance. Do not add signatures, public-key identities, or adversarial transport hardening unless public rooms, matchmaking, stakes, or untrusted participants become product goals. Still preserve basic sender consistency checks and normal input validation where they prevent accidental corruption. A sender ID declared inside the shared Yjs document is only a consistency field, not verified identity; meaningful sender authentication would require a different transport or credentials.
-
-Canonical construction and restoration:
-
-```typescript
-const game = new PokerGame(config);
-const engine = new GameEngine(game, { history });
-```
-
-- `gameEngine.ts` is generic infrastructure. It owns command revision, deduplication, and authoritative event history. History retains accepted command boundaries and command IDs; revision is always `history.length`. The engine restores a fresh game by applying history, asks the game to decide commands without mutation, atomically applies accepted event batches, and only then appends them. It knows nothing about poker, networking, persistence, or Svelte. Do not add arbitrary state replacement or a `commit()` escape hatch; state changes must originate as game commands and events.
-- `pokerGame.ts` is the stateful poker implementation. `PokerGame(config)` begins from initial state and does not retain history. `decide()` delegates to pure `decidePokerCommand()` logic, `apply(events)` evolves a temporary state and commits only after the complete batch succeeds, and `snapshot()` returns a detached UI/network view. `PokerEvent` currently records accepted commands and their context rather than granular domain facts; treat the persisted format as version-sensitive until versioned domain events and migrations are introduced.
-- The host's event history is the durable source of truth for public game state. `persistence.ts` stores a versioned host configuration/history aggregate together with private digital dealer state (deck and hole cards) so a reload cannot advance one without the other. Persist an accepted revision successfully before publishing it; if persistence fails, freeze host command processing rather than exposing an unsaved revision. Clients do not persist game state; after refresh they reconnect and receive a current snapshot.
-- `pokerProtocol.ts` translates poker network messages to/from generic engine commands and results.
-- `peerManager.ts` is transport only: Yjs/WebRTC discovery, commands, acknowledgements, awareness, and replicated snapshots. Transport must not apply rules or mutate revisions.
-- `gameLogic.ts` contains poker rule primitives and has no networking or persistence side effects.
-- `App.svelte` composes UI, `GameEngine`, `PokerGame`, transport, and persistence. Shared state changes must go through game commands; do not mutate replicated state directly.
-
-Typical host flow:
+The host is authoritative. Clients send versioned commands and render replicated snapshots; they never apply poker actions locally.
 
 ```text
 client command -> PeerManager -> GameEngine -> PokerGame decision/events
-               -> append history -> publish snapshot + command result
+               -> append history -> persist -> publish snapshot + command result
 ```
 
-Keep these boundaries when adding games: implement another `Game` class and protocol adapter rather than adding game-specific behavior to `GameEngine`.
+- `gameEngine.ts` is generic: command revision, deduplication, and event history. Revision is always `history.length`. It restores a fresh game by replaying history, asks the game to decide without mutation, applies accepted batches atomically, and only then appends them. It knows nothing about poker, networking, persistence, or Svelte. Do not add arbitrary state replacement or a `commit()` escape hatch; state changes originate as game commands.
+- `pokerGame.ts` owns poker state transitions and validation of untrusted command payloads. `gameLogic.ts` holds side-effect-free rule primitives that mutate a state passed to them.
+- `dealer.ts` is the host-private digital dealer (deck, hole cards, showdown evaluation). Dealer state never enters the replicated `GameState`; hole cards travel only by direct peer message.
+- `peerManager.ts` is transport only. It must not apply rules or touch revisions. `pokerProtocol.ts` translates wire messages to engine commands and results.
+- `App.svelte` composes UI, engine, transport, persistence, and dealer timing. Shared state changes must go through game commands.
 
-## Code Style Guidelines
+To add another game, implement a new `Game` and protocol adapter rather than adding game-specific behavior to `GameEngine`.
 
-### Formatting
+## Persistence and recovery invariants
 
-- **Formatter:** oxfmt via Vite+
-- **Indent:** 4 spaces (no tabs)
-- **Line ending:** LF
-- **Quote style:** Double quotes for strings
+- The host persists the versioned config plus **command history**, never the derived `GameState`. `GameState` and snapshot shapes can change freely (clients just receive new snapshots), but `PokerEvent` currently records whole commands with their context, so the persisted history format is version-sensitive: changing command shapes or decision rules can make old histories replay differently or fail. Bump `SAVED_GAME_VERSION` deliberately.
+- Digital dealer state is saved in the same aggregate as history so a reload cannot advance one without the other.
+- Persist an accepted revision before publishing it, including to the host's own UI. If persistence fails, freeze host command processing instead of exposing an unsaved revision.
+- Clients do not persist game state. After refresh they rejoin with their session-scoped peer ID and receive a current snapshot.
+- The host publishes snapshots both through the shared Yjs map and as direct peer messages; clients accept only newer revisions. Keep both paths: either can lag or drop during WebRTC churn.
 
-### TypeScript
+## Testing
 
-- Enable strict mode checks
-- Use explicit types for function parameters and return values
-- Prefer `interface` over `type` for object shapes
-- Use PascalCase for types/interfaces, camelCase for variables/functions
-- Avoid `any` - use `unknown` with type guards instead
-- Do not duplicate guarantees already enforced by TypeScript with runtime checks for internal typed values. Use runtime validation at actual untyped boundaries such as parsed storage or network input, and for semantic constraints the type system cannot express.
+- Unit tests run under Node with Vite+ test (`vite-plus/test`); browser storage is stubbed with `installMemoryStorage` from `src/lib/testStorage.ts`.
+- Playwright tests start a local Nostr relay (`e2e/nostrRelay.ts`) and a dev server with a short phase-advance delay. They read game state through the DEV-only `window.__pokerGameState` hook. Shared room setup lives in `e2e/helpers.ts`.
+- Run `npm run test:stress` (deterministic, seeded, 100 hands) after synchronization, engine, or turn-order changes. One cross-browser test needs Playwright's Firefox (`npx playwright install firefox`).
+- After signaling or NAT changes, run `npm run test:cross-network -- <ssh-host>` with the remote Firefox on a genuinely different network (for example, cellular). Read `e2e/cross-network/README.md` first; it covers remote setup and testing uncommitted code with matching local dev servers.
+- Prefer outcome-focused tests through public rule functions; do not export internals just to test them.
 
-### Svelte Components
+## Commands and workflow
 
-- Use `<script lang="ts">` for TypeScript support
-- Use Svelte 5 runes: `$state()`, `$derived()`, `$effect()`, `$props()`
-- Keep components focused and small
-- Use scoped `<style>` for component-specific styles
-- Props interface: `interface Props { ... }`
+`npm run check` (format check, lint, and types), `npm run lint`, `npm run format`, `npm test`, `npm run test:e2e`, `npm run test:stress`, `npm run test:cross-network`, `npm run build`. Run format, check, unit tests, and relevant e2e tests before committing.
 
-### Imports
+`npm run build` writes the GitHub Pages site into the tracked `docs/` directory.
 
-- Group imports: external libs first, then internal modules
-- Use named imports when possible
-- Import order: Svelte, external deps, internal modules, types
-- Example:
+## Code conventions
 
-```typescript
-import { mount } from "svelte";
-import { writable } from "svelte/store";
-import Counter from "./lib/Counter.svelte";
-import type { GameState } from "./types";
-```
+Formatting and lint rules are enforced by `npm run check`. Beyond those:
 
-### Naming Conventions
-
-- **Components:** PascalCase (e.g., `Counter.svelte`)
-- **Files:** camelCase for utilities, PascalCase for components
-- **Variables/Functions:** camelCase
-- **Constants:** UPPER_SNAKE_CASE for true constants
-- **Types/Interfaces:** PascalCase with descriptive names
-- **Event handlers:** `handle<Event>` (e.g., `handleClick`)
-
-### Error Handling
-
-- Use try-catch for async operations
-- Prefer early returns over nested conditionals
-- Validate props with TypeScript interfaces
-- Use non-null assertion (`!`) sparingly and only when certain
-
-### State Management
-
-- Use Svelte 5 runes for local component state
-- External stores in `src/lib/stores/` for shared state
-- Example:
-
-```typescript
-let count = $state(0);
-let doubled = $derived(count * 2);
-```
-
-### CSS/Styling
-
-- Component-scoped styles in `<style>` blocks
-- Global styles in `src/app.css`
-- Use CSS custom properties (variables) for theming
-- Mobile-first responsive design
-
-### Project Structure
-
-```
-.
-├── .github/workflows/   # CI
-├── docs/                # Production build output for GitHub Pages
-├── src/
-│   ├── main.ts
-│   ├── App.svelte
-│   ├── app.css
-│   └── lib/
-│       ├── gameEngine.ts      # Generic event-history/command engine
-│       ├── pokerGame.ts       # Stateful poker game and pure decisions
-│       ├── gameLogic.ts       # Poker rule primitives
-│       ├── pokerProtocol.ts   # Network/engine message adapter
-│       ├── peerManager.ts     # Yjs/WebRTC transport
-│       ├── persistence.ts     # Host history and session persistence
-│       ├── syncLogic.ts       # Replica snapshot freshness
-│       ├── poker.ts           # Cards and hand evaluation
-│       ├── types.ts           # Poker and wire types
-│       └── *.test.ts
-├── package.json
-├── tsconfig.app.json
-├── tsconfig.json
-├── tsconfig.node.json
-└── vite.config.ts
-```
-
-## Pre-commit Checklist
-
-1. Run `npm run format` - code is formatted
-2. Run `npm run check` - no TypeScript errors
-3. Run `npm run lint` - no linting errors
-4. Run `npm test` - unit tests pass
-5. Run relevant E2E tests; use `npm run test:stress` for synchronization/state-engine changes
-    - For signaling/NAT changes, run `npm run test:cross-network -- <ssh-host>` with the remote browser on a genuinely different network.
-6. Verify `npm run build` succeeds
-
-## Documentation
-
-The root `README.md` is still a starter document. Replacing it with detailed project architecture is intentionally low priority while the architecture is changing; do that near the end once setup, gameplay assumptions, recovery behavior, and limitations are stable. Continue updating focused documentation when public behavior or operational steps change.
-
-## Dependencies
-
-- `y-nostr` and `y-webtorrent` - Redundant signaling transports coordinated by `MultiProvider`
-- `yjs` - Shared CRDT state
-- `qrcode` - QR code generation
+- Use Svelte 5 runes; derive values with `$derived` rather than mirroring state or syncing it in `$effect`.
+- Prefer `interface` for object shapes; avoid `any` (use `unknown` and narrow).
+- Validate at untyped boundaries (parsed storage, peer messages, form input) and for semantic constraints the type system cannot express. Do not re-check internal typed values at runtime.
