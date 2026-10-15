@@ -80,6 +80,20 @@ describe("hand setup", () => {
         ]);
     });
 
+    it("moves the button to the next active seat when the dealer busts", () => {
+        const state = createState(4);
+        state.dealerId = "p3";
+        player(state, "p3").chips = 0;
+
+        startNewHand(state);
+
+        expect([state.dealerId, state.smallBlindId, state.bigBlindId]).toEqual([
+            "p4",
+            "host",
+            "p2",
+        ]);
+    });
+
     it("applies antes to the pot before blinds", () => {
         const state = createState(3, { ante: 2 });
 
@@ -293,7 +307,7 @@ describe("betting round completion and phase progression", () => {
 });
 
 describe("outcome recording", () => {
-    it("applies single and split payouts and clears the pot", () => {
+    it("splits a pot between winners and clears it", () => {
         const state = createState(3);
         state.phase = "showdown";
         state.pot = 90;

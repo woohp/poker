@@ -1,4 +1,4 @@
-import type { GameConfig, GameState, Payout, Player, PlayerAction } from "./types";
+import type { GameConfig, GamePhase, GameState, Payout, Player, PlayerAction } from "./types";
 
 export const MAX_PLAYERS = 10;
 
@@ -30,6 +30,12 @@ export function createInitialGameState(
         statusMessage: "Waiting for players",
         lastPayouts: [],
     };
+}
+
+/** Community cards dealt when betting on `phase` completes. */
+export function communityCardsAfter(phase: GamePhase): number {
+    if (phase === "preflop") return 3;
+    return phase === "flop" || phase === "turn" ? 1 : 0;
 }
 
 export function getValidActions(state: GameState, player: Player): PlayerAction[] {
@@ -401,7 +407,12 @@ function getActivePlayerCount(players: Player[]): number {
 
 function moveBlinds(state: GameState, activePlayers: Player[]): void {
     const activeIds = activePlayers.map((player) => player.id);
-    const dealerPosition = (activeIds.indexOf(state.dealerId) + 1) % activeIds.length;
+    const dealerIndex = state.players.findIndex((player) => player.id === state.dealerId);
+    const nextDealer = [
+        ...state.players.slice(dealerIndex + 1),
+        ...state.players.slice(0, dealerIndex + 1),
+    ].find((player) => player.isActive)!;
+    const dealerPosition = activeIds.indexOf(nextDealer.id);
     const seat = (offset: number) => activeIds[(dealerPosition + offset) % activeIds.length]!;
     const headsUp = activeIds.length === 2;
 
