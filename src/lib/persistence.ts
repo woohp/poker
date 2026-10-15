@@ -1,22 +1,16 @@
+import type { DealerState } from "./dealer";
 import type { GameHistoryEntry } from "./gameEngine";
 import type { PokerEvent, PokerGameConfig } from "./pokerGame";
-import type { Card } from "./types";
 
 const GAME_STORAGE_KEY = "poker_game_state";
 const SESSION_STORAGE_KEY = "poker_session";
 export const SAVED_GAME_VERSION = 1;
 
-export interface SavedDealerState {
-    round: number;
-    deck: Card[];
-    hands: Array<[string, Card[]]>;
-}
-
 export interface SavedGame {
     version: typeof SAVED_GAME_VERSION;
     config: PokerGameConfig;
     history: readonly GameHistoryEntry<PokerEvent>[];
-    dealer?: SavedDealerState;
+    dealer?: DealerState;
 }
 
 export interface SessionData {

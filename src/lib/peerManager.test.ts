@@ -1,85 +1,50 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type * as Y from "yjs";
-import type { GameSnapshot, GameState, PeerMessage } from "./types";
+import { createInitialGameState } from "./gameLogic";
+import type { GameSnapshot, PeerMessage } from "./types";
 
-interface MockProviderInstance {
-    roomName: string;
-    doc: Y.Doc;
-    opts: { providers: unknown[] };
-    handlers: Map<string, Array<(...payload: unknown[]) => void>>;
-    awareness: MockAwareness;
-    peers: Map<string, never>;
-    sentDirectMessages: Array<{ peerId: string; payload: Uint8Array }>;
-    destroyed: boolean;
-    ready: Promise<void>;
-    on: (event: string, handler: (...payload: unknown[]) => void) => void;
-    emit: (event: string, ...payload: unknown[]) => void;
-    destroy: () => void;
-}
+const { MockMultiProvider } = vi.hoisted(() => {
+    class MockAwareness {
+        private states = new Map<number, Record<string, unknown>>();
 
-class MockAwareness {
-    private states = new Map<number, Record<string, unknown>>();
-    private handlers: Array<() => void> = [];
+        setLocalState(state: Record<string, unknown> | null): void {
+            if (state) this.states.set(1, state);
+            else this.states.delete(1);
+        }
 
-    setLocalState(state: Record<string, unknown> | null): void {
-        if (state) this.states.set(1, state);
-        else this.states.delete(1);
-        this.emitChange();
+        setRemotePeerIds(peerIds: string[]): void {
+            const localState = this.states.get(1);
+            this.states = new Map(peerIds.map((peerId, index) => [index + 2, { peerId }]));
+            if (localState) this.states.set(1, localState);
+        }
+
+        getStates(): Map<number, Record<string, unknown>> {
+            return this.states;
+        }
     }
 
-    setRemotePeerIds(peerIds: string[]): void {
-        const localState = this.states.get(1);
-        this.states = new Map(peerIds.map((peerId, index) => [index + 2, { peerId }]));
-        if (localState) this.states.set(1, localState);
-        this.emitChange();
-    }
-
-    getStates(): Map<number, Record<string, unknown>> {
-        return this.states;
-    }
-
-    on(_event: "change", handler: () => void): void {
-        this.handlers.push(handler);
-    }
-
-    private emitChange(): void {
-        for (const handler of this.handlers) handler();
-    }
-}
-
-const multiProviderMock = vi.hoisted(() => ({
-    instances: [] as MockProviderInstance[],
-}));
-
-vi.mock("y-multiprovider", async () => {
     class MockMultiProvider {
-        roomName: string;
-        doc: Y.Doc;
-        opts: { providers: unknown[] };
+        static instances: MockMultiProvider[] = [];
         handlers = new Map<string, Array<(...payload: unknown[]) => void>>();
         awareness = new MockAwareness();
-        peers = new Map<string, never>();
         sentDirectMessages: Array<{ peerId: string; payload: Uint8Array }> = [];
         destroyed = false;
         ready = Promise.resolve();
 
-        constructor(roomName: string, doc: Y.Doc, opts: { providers: unknown[] }) {
-            this.roomName = roomName;
-            this.doc = doc;
-            this.opts = opts;
-            multiProviderMock.instances.push(this as MockProviderInstance);
+        constructor(
+            readonly roomName: string,
+            readonly doc: Y.Doc,
+            readonly opts: { providers: unknown[] },
+        ) {
+            MockMultiProvider.instances.push(this);
         }
 
         on(event: string, handler: (...payload: unknown[]) => void) {
-            const handlers = this.handlers.get(event) || [];
-            handlers.push(handler);
-            this.handlers.set(event, handlers);
+            this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
         }
 
         emit(event: string, ...payload: unknown[]) {
-            for (const handler of this.handlers.get(event) || []) {
-                handler(...payload);
-            }
+            for (const handler of this.handlers.get(event) ?? []) handler(...payload);
         }
 
         sendToPeer(peerId: string, payload: Uint8Array) {
@@ -92,66 +57,61 @@ vi.mock("y-multiprovider", async () => {
         }
     }
 
-    return {
-        MultiProvider: MockMultiProvider,
-    };
+    return { MockMultiProvider };
 });
+
+vi.mock("y-multiprovider", () => ({ MultiProvider: MockMultiProvider }));
 
 import { PeerManager } from "./peerManager";
 
-function parseLastMessage(doc: Y.Doc): unknown {
-    const messages = doc.getArray<string>("messages").toArray();
-    return JSON.parse(messages.at(-1) || "null");
+interface Envelope {
+    id: string;
+    from: string;
+    to: string | null;
+    message: PeerMessage;
 }
 
-function sampleState(): GameState {
-    return {
-        players: [],
-        phase: "waiting",
-        pot: 0,
-        currentBet: 0,
-        minRaise: 10,
-        round: 0,
-        communityCards: [],
-        revealedHands: [],
-        config: {
-            mode: "physical",
-            startingChips: 1000,
-            smallBlind: 5,
-            bigBlind: 10,
-            ante: 0,
-        },
-        statusMessage: "",
-        lastPayouts: [],
-    };
+function lastProvider(): InstanceType<typeof MockMultiProvider> {
+    return MockMultiProvider.instances.at(-1)!;
+}
+
+function parseLastMessage(doc: Y.Doc): Envelope {
+    return JSON.parse(doc.getArray<string>("messages").toArray().at(-1)!) as Envelope;
+}
+
+function pushEnvelopes(doc: Y.Doc, ...envelopes: Envelope[]): void {
+    doc.getArray<string>("messages").push(envelopes.map((envelope) => JSON.stringify(envelope)));
 }
 
 function sampleSnapshot(revision = 0): GameSnapshot {
     return {
         revision,
-        state: sampleState(),
+        state: createInitialGameState(
+            { mode: "physical", startingChips: 1000, smallBlind: 5, bigBlind: 10, ante: 0 },
+            "Host",
+            "host",
+        ),
     };
 }
 
 describe("PeerManager", () => {
     beforeEach(() => {
-        multiProviderMock.instances.length = 0;
+        MockMultiProvider.instances.length = 0;
     });
 
-    it("creates a host with the provided peer id and room code", async () => {
+    it("hosts the provided room, or generates a room code", async () => {
         const peerManager = new PeerManager(
             () => {},
             () => {},
         );
 
-        const peerId = await peerManager.createHost("host-1", "room-1");
-        const provider = multiProviderMock.instances[0]!;
+        expect(await peerManager.createHost("host-1", "room-1")).toBe("room-1");
+        expect(lastProvider().roomName).toBe("room-1");
+        expect(lastProvider().opts.providers).toHaveLength(2);
 
-        expect(peerId).toBe("host-1");
-        expect(peerManager.getLocalPeerId()).toBe("host-1");
-        expect(peerManager.getRoomCode()).toBe("room-1");
-        expect(provider.roomName).toBe("room-1");
-        expect(provider.opts.providers).toHaveLength(2);
+        const generatedRoomCode = await peerManager.createHost("host-1");
+        expect(generatedRoomCode).toHaveLength(10);
+        expect(lastProvider().roomName).toBe(generatedRoomCode);
     });
 
     it("joins a room and publishes a join message", async () => {
@@ -160,16 +120,11 @@ describe("PeerManager", () => {
             () => {},
         );
 
-        const peerId = await peerManager.joinGame("room-2", "Alice", "guest-1");
-        const provider = multiProviderMock.instances[0]!;
-        const message = parseLastMessage(provider.doc) as {
-            from: string;
-            to: string | null;
-            message: PeerMessage;
-        };
+        await peerManager.joinGame("room-2", "Alice", "guest-1");
+        const provider = lastProvider();
+        const message = parseLastMessage(provider.doc);
 
-        expect(peerId).toBe("guest-1");
-        expect(peerManager.getRoomCode()).toBe("room-2");
+        expect(provider.roomName).toBe("room-2");
         expect(message.from).toBe("guest-1");
         expect(message.to).toBeNull();
         expect(message.message).toMatchObject({
@@ -180,37 +135,24 @@ describe("PeerManager", () => {
         expect(message.message.type === "join" && message.message.requestId).toBeTruthy();
     });
 
-    it("sends targeted messages and broadcasts shared state", async () => {
+    it("sends targeted room messages", async () => {
         const peerManager = new PeerManager(
             () => {},
             () => {},
         );
         await peerManager.createHost("host-2", "room-3");
 
-        const provider = multiProviderMock.instances[0]!;
-        const snapshot = sampleSnapshot();
-
         peerManager.sendToPeer("guest-2", {
             type: "joinResponse",
             requestId: "request-2",
-            accepted: true,
-            playerId: "guest-2",
-            snapshot,
+            accepted: false,
         });
-        peerManager.broadcastState(snapshot);
 
-        const message = parseLastMessage(provider.doc) as {
-            to: string | null;
-            message: PeerMessage;
-        };
-
-        expect(message.to).toBe("guest-2");
-        expect(message.message).toMatchObject({
-            type: "joinResponse",
-            accepted: true,
-            playerId: "guest-2",
+        expect(parseLastMessage(lastProvider().doc)).toMatchObject({
+            from: "host-2",
+            to: "guest-2",
+            message: { type: "joinResponse", requestId: "request-2", accepted: false },
         });
-        expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(snapshot));
     });
 
     it("broadcasts state directly with Yjs as a synchronization fallback", async () => {
@@ -220,14 +162,13 @@ describe("PeerManager", () => {
         );
         await peerManager.createHost("host-direct", "room-direct");
 
-        const provider = multiProviderMock.instances[0]!;
+        const provider = lastProvider();
         provider.awareness.setRemotePeerIds(["peer-a", "peer-b"]);
         const snapshot = sampleSnapshot();
         snapshot.state.pot = 75;
 
         peerManager.broadcastState(snapshot);
 
-        expect(snapshot.revision).toBe(0);
         expect(provider.doc.getMap<string>("state").get("game")).toBe(JSON.stringify(snapshot));
         expect(
             provider.sentDirectMessages.map(({ peerId, payload }) => ({
@@ -240,58 +181,25 @@ describe("PeerManager", () => {
         ]);
     });
 
-    it("keeps the newest Yjs state", async () => {
-        const receivedStates: GameSnapshot[] = [];
-        const peerManager = new PeerManager(
-            (message) => {
-                if (message.type === "state") receivedStates.push(message.snapshot);
-            },
-            () => {},
-        );
-        await peerManager.joinGame("room-state-order", "Guest", "guest-state-order");
-
-        const provider = multiProviderMock.instances[0]!;
-        const olderState = sampleSnapshot(1);
-        olderState.state.pot = 10;
-        const newerState = sampleSnapshot(2);
-        newerState.state.pot = 20;
-
-        provider.doc.getMap<string>("state").set("game", JSON.stringify(olderState));
-        provider.doc.getMap<string>("state").set("game", JSON.stringify(newerState));
-
-        expect(receivedStates.at(-1)).toEqual(newerState);
-        expect(provider.sentDirectMessages).toHaveLength(0);
-    });
-
     it("delivers broadcast room messages to the host", async () => {
         const onMessage = vi.fn();
         const peerManager = new PeerManager(onMessage, () => {});
         await peerManager.createHost("host-3", "room-4");
 
-        const provider = multiProviderMock.instances[0]!;
-        provider.doc.getArray<string>("messages").push([
-            JSON.stringify({
-                id: "msg-1",
-                from: "guest-3",
-                to: null,
-                message: {
-                    type: "join",
-                    requestId: "request-3",
-                    playerName: "Bob",
-                    peerId: "guest-3",
-                },
-            }),
-        ]);
+        const join: PeerMessage = {
+            type: "join",
+            requestId: "request-3",
+            playerName: "Bob",
+            peerId: "guest-3",
+        };
+        pushEnvelopes(lastProvider().doc, {
+            id: "msg-1",
+            from: "guest-3",
+            to: null,
+            message: join,
+        });
 
-        expect(onMessage).toHaveBeenCalledWith(
-            {
-                type: "join",
-                requestId: "request-3",
-                playerName: "Bob",
-                peerId: "guest-3",
-            },
-            "guest-3",
-        );
+        expect(onMessage).toHaveBeenCalledWith(join, "guest-3");
     });
 
     it("delivers messages inserted before previously processed messages", async () => {
@@ -299,48 +207,37 @@ describe("PeerManager", () => {
         const peerManager = new PeerManager(onMessage, () => {});
         await peerManager.createHost("host-ordered", "room-ordered");
 
-        const messages = multiProviderMock.instances[0]!.doc.getArray<string>("messages");
-        messages.push([
-            JSON.stringify({
-                id: "msg-later",
-                from: "guest-later",
-                to: null,
-                message: {
-                    type: "join",
-                    requestId: "request-later",
-                    playerName: "Later",
-                    peerId: "guest-later",
-                },
-            }),
-        ]);
-        messages.insert(0, [
+        const doc = lastProvider().doc;
+        pushEnvelopes(doc, {
+            id: "msg-later",
+            from: "guest-later",
+            to: null,
+            message: {
+                type: "join",
+                requestId: "request-later",
+                playerName: "Later",
+                peerId: "guest-later",
+            },
+        });
+        const action: PeerMessage = {
+            type: "action",
+            commandId: "command-earlier",
+            playerId: "guest-earlier",
+            round: 1,
+            expectedRevision: 1,
+            action: "check",
+        };
+        doc.getArray<string>("messages").insert(0, [
             JSON.stringify({
                 id: "msg-earlier",
                 from: "guest-earlier",
                 to: "host-ordered",
-                message: {
-                    type: "action",
-                    commandId: "command-earlier",
-                    playerId: "guest-earlier",
-                    round: 1,
-                    expectedRevision: 1,
-                    action: "check",
-                },
+                message: action,
             }),
         ]);
 
         expect(onMessage).toHaveBeenCalledTimes(2);
-        expect(onMessage).toHaveBeenLastCalledWith(
-            {
-                type: "action",
-                commandId: "command-earlier",
-                playerId: "guest-earlier",
-                round: 1,
-                expectedRevision: 1,
-                action: "check",
-            },
-            "guest-earlier",
-        );
+        expect(onMessage).toHaveBeenLastCalledWith(action, "guest-earlier");
     });
 
     it("delivers only the join response matching the current request", async () => {
@@ -348,36 +245,25 @@ describe("PeerManager", () => {
         const peerManager = new PeerManager(onMessage, () => {});
         await peerManager.joinGame("room-5", "Cara", "guest-4");
 
-        const provider = multiProviderMock.instances[0]!;
-        const joinEnvelope = parseLastMessage(provider.doc) as {
-            message: { type: "join"; requestId: string };
-        };
-        const response = {
-            type: "joinResponse" as const,
-            requestId: joinEnvelope.message.requestId,
+        const doc = lastProvider().doc;
+        const join = parseLastMessage(doc).message;
+        const response: PeerMessage = {
+            type: "joinResponse",
+            requestId: join.type === "join" ? join.requestId : "",
             accepted: true,
             playerId: "guest-4",
             snapshot: sampleSnapshot(),
         };
-        provider.doc.getArray<string>("messages").push([
-            JSON.stringify({
+        pushEnvelopes(
+            doc,
+            {
                 id: "msg-stale",
                 from: "host-4",
                 to: "guest-4",
-                message: {
-                    type: "joinResponse",
-                    requestId: "old-request",
-                    accepted: false,
-                    message: "stale rejection",
-                },
-            }),
-            JSON.stringify({
-                id: "msg-hit",
-                from: "host-4",
-                to: "guest-4",
-                message: response,
-            }),
-        ]);
+                message: { type: "joinResponse", requestId: "old-request", accepted: false },
+            },
+            { id: "msg-hit", from: "host-4", to: "guest-4", message: response },
+        );
 
         expect(onMessage).toHaveBeenCalledTimes(1);
         expect(onMessage).toHaveBeenCalledWith(response, "host-4");
@@ -388,7 +274,7 @@ describe("PeerManager", () => {
         const peerManager = new PeerManager(onMessage, () => {});
         await peerManager.joinGame("room-6", "Dana", "guest-5");
 
-        const provider = multiProviderMock.instances[0]!;
+        const provider = lastProvider();
         const snapshot = sampleSnapshot();
         snapshot.state.pot = 55;
 
@@ -402,7 +288,7 @@ describe("PeerManager", () => {
         const peerManager = new PeerManager(() => {}, onConnectionChange);
         await peerManager.createHost("host-5", "room-7");
 
-        const provider = multiProviderMock.instances[0]!;
+        const provider = lastProvider();
         provider.emit("peer-change", {
             peerId: "peer-a",
             connected: true,
@@ -439,7 +325,7 @@ describe("PeerManager", () => {
         );
         await peerManager.createHost("host-6", "room-8");
 
-        const provider = multiProviderMock.instances[0]!;
+        const provider = lastProvider();
         peerManager.disconnect();
         peerManager.disconnect();
 

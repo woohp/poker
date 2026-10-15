@@ -3,6 +3,7 @@ import {
     PokerGame,
     decidePokerCommand,
     type PokerCommand,
+    type PokerCommandContext,
     type PokerEvent,
     type PokerGameConfig,
 } from "./pokerGame";
@@ -19,14 +20,16 @@ const config: PokerGameConfig = {
     hostPeerId: "host",
 };
 
+/** Decides and applies an accepted command, returning its events. */
 function execute(
     game: PokerGame,
     command: PokerCommand,
-    context: { actorId: string; trusted?: boolean },
-) {
+    context: PokerCommandContext,
+): readonly PokerEvent[] {
     const decision = game.decide(command, context);
-    if (decision.accepted) game.apply(decision.events);
-    return decision;
+    if (!decision.accepted) throw new Error(`Rejected ${command.type}: ${decision.reason}`);
+    game.apply(decision.events);
+    return decision.events;
 }
 
 function createStartedGame(): PokerGame {
@@ -42,10 +45,9 @@ function createStartedGame(): PokerGame {
 
 function createFoldCommand(game: PokerGame): Extract<PokerCommand, { type: "player-action" }> {
     const state = game.snapshot();
-    const player = state.players.find((entry) => entry.isCurrentTurn)!;
     return {
         type: "player-action",
-        playerId: player.id,
+        playerId: state.currentPlayerId!,
         round: state.round,
         action: "fold",
     };
@@ -78,14 +80,17 @@ describe("PokerGame", () => {
         ).not.toThrow();
     });
 
-    it("owns its state while using pure poker decisions", () => {
+    it("decides without mutating state and returns detached snapshots", () => {
         const game = createStartedGame();
         const before = game.snapshot();
         const command = createFoldCommand(game);
 
-        const result = execute(game, command, { actorId: command.playerId });
+        expect(decidePokerCommand(before, command, { actorId: command.playerId }).accepted).toBe(
+            true,
+        );
+        expect(game.snapshot()).toEqual(before);
 
-        expect(result.accepted).toBe(true);
+        execute(game, command, { actorId: command.playerId });
         expect(before.players.find((player) => player.id === command.playerId)?.hasFolded).toBe(
             false,
         );
@@ -94,38 +99,29 @@ describe("PokerGame", () => {
         ).toBe(true);
     });
 
-    it("does not change its state when a decision is rejected", () => {
+    it("rejects actions for another player without changing state", () => {
         const game = createStartedGame();
         const before = game.snapshot();
-        const command = createFoldCommand(game);
 
-        const result = execute(game, command, { actorId: "different-player" });
-
-        expect(result).toEqual({ accepted: false, reason: "wrong-player" });
+        expect(game.decide(createFoldCommand(game), { actorId: "different-player" })).toEqual({
+            accepted: false,
+            reason: "wrong-player",
+        });
         expect(game.snapshot()).toEqual(before);
     });
 
     it("reconstructs its state by applying events", () => {
         const original = new PokerGame(config);
-        const events: PokerEvent[] = [];
-        const addResult = execute(
-            original,
-            { type: "add-player", playerId: "guest", playerName: "Guest" },
-            { actorId: "host", trusted: true },
-        );
-        if (!addResult.accepted) throw new Error("Expected player to be added");
-        events.push(...addResult.events);
-        const startResult = execute(
-            original,
-            { type: "start-hand" },
-            { actorId: "host", trusted: true },
-        );
-        if (!startResult.accepted) throw new Error("Expected hand to start");
-        events.push(...startResult.events);
+        const events = [
+            ...execute(
+                original,
+                { type: "add-player", playerId: "guest", playerName: "Guest" },
+                { actorId: "host", trusted: true },
+            ),
+            ...execute(original, { type: "start-hand" }, { actorId: "host", trusted: true }),
+        ];
         const command = createFoldCommand(original);
-        const actionResult = execute(original, command, { actorId: command.playerId });
-        if (!actionResult.accepted) throw new Error("Expected accepted command");
-        events.push(...actionResult.events);
+        events.push(...execute(original, command, { actorId: command.playerId }));
 
         const restored = new PokerGame(config);
         restored.apply(events);
@@ -194,18 +190,5 @@ describe("PokerGame", () => {
                 { actorId: "host", trusted: true },
             ),
         ).toEqual({ accepted: false, reason: "invalid-action" });
-    });
-
-    it("keeps command decisions pure", () => {
-        const game = createStartedGame();
-        const state = game.snapshot();
-        const command = createFoldCommand(game);
-
-        const result = decidePokerCommand(state, command, { actorId: command.playerId });
-
-        expect(result.accepted).toBe(true);
-        expect(state.players.find((player) => player.id === command.playerId)?.hasFolded).toBe(
-            false,
-        );
     });
 });
