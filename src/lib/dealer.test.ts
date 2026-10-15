@@ -19,16 +19,21 @@ function cards(value: string): Card[] {
 }
 
 describe("digital dealer", () => {
-    it("deals two unique cards to each active player and draws the board", () => {
-        const state = createHand();
-        const dealer = dealHand(state);
+    it("deals two cards to each active player from one unique deck", () => {
+        const dealer = dealHand(createHand());
 
         expect(dealer.hands.map(([playerId, hand]) => [playerId, hand.length])).toEqual([
             ["host", 2],
             ["p2", 2],
             ["p3", 2],
         ]);
-        expect(restoreDealer(dealer, state)).toBe(dealer);
+        expect(new Set([...dealer.deck, ...dealer.hands.flatMap(([, hand]) => hand)]).size).toBe(
+            52,
+        );
+    });
+
+    it("draws three, one, one, then no community cards", () => {
+        const dealer = dealHand(createHand());
 
         const flop = drawCommunityCards(dealer, "preflop");
         expect(flop.cards).toHaveLength(3);
@@ -60,10 +65,11 @@ describe("digital dealer", () => {
         });
     });
 
-    it("rejects dealer state that does not account for the whole deck", () => {
+    it("restores consistent dealer state and rejects inconsistent or stale state", () => {
         const state = createHand();
         const dealer = dealHand(state);
 
+        expect(restoreDealer(dealer, state)).toBe(dealer);
         expect(() => restoreDealer({ ...dealer, deck: dealer.deck.slice(1) }, state)).toThrow(
             "Invalid digital dealer state",
         );

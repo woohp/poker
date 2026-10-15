@@ -20,7 +20,7 @@ client command -> PeerManager -> GameEngine -> PokerGame decision/events
 ```
 
 - `gameEngine.ts` is generic: command revision, deduplication, and event history. Revision is always `history.length`. It restores a fresh game by replaying history, asks the game to decide without mutation, applies accepted batches atomically, and only then appends them. It knows nothing about poker, networking, persistence, or Svelte. Do not add arbitrary state replacement or a `commit()` escape hatch; state changes originate as game commands.
-- `pokerGame.ts` owns poker state transitions and validation of untrusted command payloads. `gameLogic.ts` holds side-effect-free rule primitives that mutate a state passed to them.
+- `pokerGame.ts` owns poker state transitions and validation of untrusted command payloads. `gameLogic.ts` holds poker rule primitives with no I/O; they mutate the state passed in.
 - `dealer.ts` is the host-private digital dealer (deck, hole cards, showdown evaluation). Dealer state never enters the replicated `GameState`; hole cards travel only by direct peer message.
 - `peerManager.ts` is transport only. It must not apply rules or touch revisions. `pokerProtocol.ts` translates wire messages to engine commands and results.
 - `App.svelte` composes UI, engine, transport, persistence, and dealer timing. Shared state changes must go through game commands.
@@ -37,8 +37,8 @@ To add another game, implement a new `Game` and protocol adapter rather than add
 
 ## Testing
 
-- Unit tests run under Node with Vite+ test (`vite-plus/test`); browser storage is stubbed with `installMemoryStorage` from `src/lib/testStorage.ts`.
-- Playwright tests start a local Nostr relay (`e2e/nostrRelay.ts`) and a dev server with a short phase-advance delay. They read game state through the DEV-only `window.__pokerGameState` hook. Shared room setup lives in `e2e/helpers.ts`.
+- Unit tests run under Node with Vite+ test (`vite-plus/test`), so browser storage must be stubbed.
+- Playwright tests start a local Nostr relay (`e2e/nostrRelay.ts`) and a dev server with a short phase-advance delay. They read game state through the DEV-only `window.__pokerGameState` hook. They reuse an already-running dev server outside CI, so do not edit served source files while e2e tests run: hot reloads disrupt them.
 - Run `npm run test:stress` (deterministic, seeded, 100 hands) after synchronization, engine, or turn-order changes. One cross-browser test needs Playwright's Firefox (`npx playwright install firefox`).
 - After signaling or NAT changes, run `npm run test:cross-network -- <ssh-host>` with the remote Firefox on a genuinely different network (for example, cellular). Read `e2e/cross-network/README.md` first; it covers remote setup and testing uncommitted code with matching local dev servers.
 - Prefer outcome-focused tests through public rule functions; do not export internals just to test them.

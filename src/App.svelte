@@ -571,6 +571,7 @@ async function createGame() {
     isLoading = true;
     persistenceFailed = false;
     dealer = null;
+    showdownSelections = {};
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
     isHost = true;
 
@@ -583,7 +584,7 @@ async function createGame() {
         const config: GameConfig = { mode: gameMode, startingChips, smallBlind, bigBlind, ante };
         pokerGameConfig = { game: config, hostPlayerName: playerName, hostPeerId: peerId };
         gameEngine = new GameEngine(new PokerGame(pokerGameConfig));
-        publishCurrentState();
+        if (!publishCurrentState()) throw new Error("Failed to save the new game");
         saveSession({ isHost: true, roomCode, playerName });
         isLoading = false;
         navigate({ name: "room", roomCode });
@@ -591,6 +592,7 @@ async function createGame() {
         setTimeout(() => generateQRCode(roomCode), 100);
     } catch (_error) {
         errorMessage = "Failed to create game. Please try again.";
+        disconnectPeerManager();
         isLoading = false;
         navigate({ name: "home" });
         isHost = false;
@@ -814,7 +816,6 @@ async function leaveGame() {
     await new Promise((resolve) => setTimeout(resolve, 100));
     disconnectPeerManager();
     gameSnapshot = null;
-    showdownSelections = {};
     isHost = false;
     localPlayerId = "";
     roomCode = "";
