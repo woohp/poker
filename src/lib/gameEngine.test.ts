@@ -57,7 +57,6 @@ describe("GameEngine", () => {
 
         expect(result).toMatchObject({ accepted: true, revision: 5, duplicate: false });
         expect(result.snapshot.state).toBe(5);
-        expect(result.events).toEqual([5]);
         expect(engine.history().at(-1)).toEqual({ commandId: "command-1", events: [5] });
     });
 

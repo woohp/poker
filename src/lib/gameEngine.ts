@@ -25,12 +25,11 @@ export interface GameHistoryEntry<Event> {
     events: readonly Event[];
 }
 
-export interface GameCommandResult<State, Event, Reason extends string> {
+export interface GameCommandResult<State, Reason extends string> {
     commandId: string;
     accepted: boolean;
     revision: number;
     reason?: Reason | "stale-state";
-    events: readonly Event[];
     snapshot: GameSnapshot<State>;
     duplicate: boolean;
 }
@@ -39,15 +38,14 @@ export interface GameEngineOptions<Event> {
     history?: readonly GameHistoryEntry<Event>[];
 }
 
-interface CachedCommandResult<Event, Reason extends string> {
+interface CachedCommandResult<Reason extends string> {
     accepted: boolean;
     reason?: Reason | "stale-state";
-    events: readonly Event[];
 }
 
 export class GameEngine<State, Command, Event, Context, Reason extends string> {
     private readonly entries: GameHistoryEntry<Event>[];
-    private readonly results = new Map<string, CachedCommandResult<Event, Reason>>();
+    private readonly results = new Map<string, CachedCommandResult<Reason>>();
 
     /** The supplied game must be freshly constructed; this constructor replays all history into it. */
     constructor(
@@ -61,10 +59,7 @@ export class GameEngine<State, Command, Event, Context, Reason extends string> {
                 throw new Error(`Duplicate command in game history: ${entry.commandId}`);
             }
             this.game.apply(entry.events);
-            this.results.set(entry.commandId, {
-                accepted: true,
-                events: structuredClone(entry.events),
-            });
+            this.results.set(entry.commandId, { accepted: true });
         }
     }
 
@@ -79,10 +74,7 @@ export class GameEngine<State, Command, Event, Context, Reason extends string> {
         return structuredClone(this.entries);
     }
 
-    dispatch(
-        command: GameCommand<Command>,
-        context: Context,
-    ): GameCommandResult<State, Event, Reason> {
+    dispatch(command: GameCommand<Command>, context: Context): GameCommandResult<State, Reason> {
         const cached = this.results.get(command.id);
         if (cached) return this.result(command.id, cached, true);
 
@@ -98,34 +90,33 @@ export class GameEngine<State, Command, Event, Context, Reason extends string> {
         const events = structuredClone(decision.events);
         this.game.apply(events);
         this.entries.push({ commandId: command.id, events });
-        return this.cacheAndReturn(command.id, { accepted: true, events });
+        return this.cacheAndReturn(command.id, { accepted: true });
     }
 
     private reject(
         commandId: string,
         reason: Reason | "stale-state",
-    ): GameCommandResult<State, Event, Reason> {
-        return this.cacheAndReturn(commandId, { accepted: false, reason, events: [] });
+    ): GameCommandResult<State, Reason> {
+        return this.cacheAndReturn(commandId, { accepted: false, reason });
     }
 
     private cacheAndReturn(
         commandId: string,
-        result: CachedCommandResult<Event, Reason>,
-    ): GameCommandResult<State, Event, Reason> {
-        this.results.set(commandId, structuredClone(result));
+        result: CachedCommandResult<Reason>,
+    ): GameCommandResult<State, Reason> {
+        this.results.set(commandId, result);
         return this.result(commandId, result, false);
     }
 
     private result(
         commandId: string,
-        result: CachedCommandResult<Event, Reason>,
+        result: CachedCommandResult<Reason>,
         duplicate: boolean,
-    ): GameCommandResult<State, Event, Reason> {
+    ): GameCommandResult<State, Reason> {
         return {
             commandId,
             accepted: result.accepted,
             reason: result.reason,
-            events: structuredClone(result.events),
             revision: this.entries.length,
             snapshot: this.snapshot(),
             duplicate,
