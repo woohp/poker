@@ -1,11 +1,5 @@
-import { calculatePotAllocations } from "./gameLogic";
-import {
-    communityCardsAfter,
-    compareHands,
-    createShuffledDeck,
-    evaluateHand,
-    isValidCard,
-} from "./poker";
+import { calculatePotAllocations, communityCardsAfter } from "./gameLogic";
+import { compareHands, createShuffledDeck, evaluateHand, isValidCard } from "./poker";
 import type { Card, GamePhase, GameState, RevealedHand } from "./types";
 
 /** Host-private digital dealer state for the current hand. */

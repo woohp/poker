@@ -1,4 +1,4 @@
-import type { Card, GamePhase } from "./types";
+import type { Card } from "./types";
 
 const RANKS = "23456789TJQKA";
 const SUITS = ["c", "d", "h", "s"] as const;
@@ -39,12 +39,6 @@ export function compareHands(left: Card[], right: Card[]): number {
 
 export function isValidCard(card: string): boolean {
     return /^[2-9TJQKA][cdhs]$/.test(card);
-}
-
-/** Community cards dealt when betting on `phase` completes. */
-export function communityCardsAfter(phase: GamePhase): number {
-    if (phase === "preflop") return 3;
-    return phase === "flop" || phase === "turn" ? 1 : 0;
 }
 
 export function formatCard(card: Card): string {

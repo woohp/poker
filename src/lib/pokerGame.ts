@@ -3,13 +3,14 @@ import {
     addPlayer,
     advancePhase,
     applyPotWinners,
+    communityCardsAfter,
     createInitialGameState,
     isBettingRoundComplete,
     processAction,
     removePlayer,
     startNewHand,
 } from "./gameLogic";
-import { communityCardsAfter, isValidCard } from "./poker";
+import { isValidCard } from "./poker";
 import type { Card, GameConfig, GameState, PlayerAction, RevealedHand } from "./types";
 
 export interface PokerGameConfig {

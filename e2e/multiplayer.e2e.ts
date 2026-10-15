@@ -39,6 +39,12 @@ async function joinGame(
     return { host, guest, close };
 }
 
+async function readGameState(page: Page): Promise<string> {
+    return page.evaluate(() =>
+        JSON.stringify((window as Window & { __pokerGameState?: unknown }).__pokerGameState),
+    );
+}
+
 async function savedRevision(page: Page): Promise<number> {
     return page.evaluate(() => {
         const raw = localStorage.getItem("poker_game_state");
@@ -150,9 +156,8 @@ test("an unsaved host revision is not published", async ({ browser }) => {
             'button[data-action="check"], button[data-action="call"]',
         );
         await expect(guestAction).toBeVisible();
-        const guestStateBefore = await guest.evaluate(() =>
-            JSON.stringify((window as Window & { __pokerGameState?: unknown }).__pokerGameState),
-        );
+        const hostStateBefore = await readGameState(host);
+        const guestStateBefore = await readGameState(guest);
 
         const storageFailureInstalled = await host.evaluate(() => {
             (window as Window & { __failPokerPersistence?: boolean }).__failPokerPersistence = true;
@@ -168,10 +173,8 @@ test("an unsaved host revision is not published", async ({ browser }) => {
 
         await expect(host.getByText(/The game could not be saved/)).toBeVisible();
         await host.waitForTimeout(500);
-        const guestStateAfter = await guest.evaluate(() =>
-            JSON.stringify((window as Window & { __pokerGameState?: unknown }).__pokerGameState),
-        );
-        expect(guestStateAfter).toBe(guestStateBefore);
+        expect(await readGameState(host)).toBe(hostStateBefore);
+        expect(await readGameState(guest)).toBe(guestStateBefore);
     } finally {
         await close();
     }
