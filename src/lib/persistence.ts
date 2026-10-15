@@ -4,7 +4,7 @@ import type { PokerEvent, PokerGameConfig } from "./pokerGame";
 
 const GAME_STORAGE_KEY = "poker_game_state";
 const SESSION_STORAGE_KEY = "poker_session";
-export const SAVED_GAME_VERSION = 1;
+export const SAVED_GAME_VERSION = 2;
 
 export interface SavedGame {
     version: typeof SAVED_GAME_VERSION;

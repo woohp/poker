@@ -205,7 +205,7 @@ export function startNewHand(state: GameState): void {
         }
     }
 
-    moveBlinds(state, activePlayers);
+    moveBlinds(state);
     postBlinds(state);
 
     state.phase = "preflop";
@@ -405,20 +405,20 @@ function getActivePlayerCount(players: Player[]): number {
     return players.filter((player) => player.isActive && !player.hasFolded).length;
 }
 
-function moveBlinds(state: GameState, activePlayers: Player[]): void {
-    const activeIds = activePlayers.map((player) => player.id);
+/** Moves the button to the next active seat after the previous dealer, then assigns blinds. */
+function moveBlinds(state: GameState): void {
     const dealerIndex = state.players.findIndex((player) => player.id === state.dealerId);
-    const nextDealer = [
+    const seats = [
         ...state.players.slice(dealerIndex + 1),
         ...state.players.slice(0, dealerIndex + 1),
-    ].find((player) => player.isActive)!;
-    const dealerPosition = activeIds.indexOf(nextDealer.id);
-    const seat = (offset: number) => activeIds[(dealerPosition + offset) % activeIds.length]!;
-    const headsUp = activeIds.length === 2;
+    ]
+        .filter((player) => player.isActive)
+        .map((player) => player.id);
+    const headsUp = seats.length === 2;
 
-    state.dealerId = seat(0);
-    state.smallBlindId = headsUp ? seat(0) : seat(1);
-    state.bigBlindId = headsUp ? seat(1) : seat(2);
+    state.dealerId = seats[0]!;
+    state.smallBlindId = headsUp ? seats[0]! : seats[1]!;
+    state.bigBlindId = headsUp ? seats[1]! : seats[2]!;
 }
 
 function postBlinds(state: GameState): void {
