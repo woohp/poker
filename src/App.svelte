@@ -1,11 +1,21 @@
 <script lang="ts">
 import QRCode from "qrcode";
 import { onDestroy, onMount } from "svelte";
+import {
+    dealHand,
+    drawCommunityCards,
+    holeCardsFor,
+    resolveShowdown,
+    restoreDealer,
+    type DealerState,
+    type Showdown,
+} from "./lib/dealer";
 import { GameEngine } from "./lib/gameEngine";
 import {
     calculatePotAllocations,
     getValidActions,
     isBettingRoundComplete,
+    MAX_PLAYERS,
 } from "./lib/gameLogic";
 import { getStablePeerId, loadStablePeerId, resetStablePeerId } from "./lib/peerIdentity";
 import { PeerManager } from "./lib/peerManager";
@@ -24,24 +34,28 @@ import {
     saveGame,
     saveSession,
     SAVED_GAME_VERSION,
-    type SavedDealerState,
     type SavedGame,
 } from "./lib/persistence";
-import { compareHands, createShuffledDeck, evaluateHand, formatCard } from "./lib/poker";
+import { formatCard } from "./lib/poker";
 import { navigate, parseRoute, type Route } from "./lib/router";
-import { shouldApplyState } from "./lib/syncLogic";
 import type {
     ActionMessage,
     Card,
     GameConfig,
     GameMode,
     GameSnapshot,
-    GameState,
     PeerMessage,
-    Player,
     PlayerAction,
-    RevealedHand,
 } from "./lib/types";
+
+const PHASE_ADVANCE_DELAY_MS = Number(import.meta.env.VITE_PHASE_ADVANCE_DELAY_MS || 1000);
+const ACTION_BUTTONS: Array<{ action: PlayerAction; label: string; color: string }> = [
+    { action: "fold", label: "Fold", color: "bg-red-500" },
+    { action: "check", label: "Check", color: "bg-gray-400" },
+    { action: "call", label: "Call", color: "bg-blue-500" },
+    { action: "raise", label: "Raise", color: "bg-purple-500" },
+    { action: "allin", label: "All In", color: "bg-yellow-500" },
+];
 
 let route: Route = $state({ name: "home" });
 let isLoading = $state(false);
@@ -49,8 +63,7 @@ let isConnectedToGame = $state(false);
 let peerManager: PeerManager | null = $state(null);
 let gameEngine: PokerEngine | null = null;
 let pokerGameConfig: PokerGameConfig | null = null;
-let gameSnapshot: GameSnapshot | null = $state(null);
-let gameState: GameState | null = $state(null);
+let gameSnapshot = $state<GameSnapshot | null>(null);
 let playerName = $state("");
 let joinCode = $state("");
 let roomCode = $state("");
@@ -75,10 +88,33 @@ let showdownSelections: Record<number, string[]> = $state({});
 let autoCheckRequested = $state(false);
 let localHoleCards: Card[] = $state([]);
 let localHoleRound = $state(0);
-let hostDeck: Card[] = [];
-let hostHoleCards = new Map<string, Card[]>();
+let dealer: DealerState | null = null;
 let persistenceFailed = false;
-const PHASE_ADVANCE_DELAY_MS = Number(import.meta.env.VITE_PHASE_ADVANCE_DELAY_MS || 1000);
+
+const gameState = $derived(gameSnapshot?.state ?? null);
+const me = $derived(gameState?.players.find((player) => player.id === localPlayerId) ?? null);
+const isMyTurn = $derived(!!me && gameState?.currentPlayerId === me.id);
+const toCall = $derived(me && gameState ? gameState.currentBet - me.currentBet : 0);
+const isWaitingForTurn = $derived(
+    !!me &&
+        !!gameState &&
+        me.isActive &&
+        !me.hasFolded &&
+        !isMyTurn &&
+        gameState.phase !== "waiting" &&
+        gameState.phase !== "showdown",
+);
+const canQueueCheck = $derived(isWaitingForTurn && toCall === 0);
+const isRecordingOutcome = $derived(
+    isHost && gameState?.phase === "showdown" && gameState.pot > 0,
+);
+const potAllocations = $derived(
+    isRecordingOutcome && gameState ? calculatePotAllocations(gameState) : [],
+);
+const canRecordOutcome = $derived(
+    potAllocations.length > 0 &&
+        potAllocations.every((_, index) => (showdownSelections[index] ?? []).length > 0),
+);
 
 onMount(() => {
     function syncRoute() {
@@ -149,53 +185,11 @@ onDestroy(() => {
 });
 
 $effect(() => {
-    if (!gameState || gameState.phase !== "showdown" || gameState.pot === 0) {
-        if (Object.keys(showdownSelections).length > 0) {
-            showdownSelections = {};
-        }
-        return;
-    }
-
-    const pots = calculatePotAllocations(gameState);
-    const nextSelections: Record<number, string[]> = {};
-    for (let index = 0; index < pots.length; index++) {
-        nextSelections[index] = showdownSelections[index] || [];
-    }
-
-    const currentKeys = Object.keys(showdownSelections);
-    const nextKeys = Object.keys(nextSelections);
-    const changed =
-        currentKeys.length !== nextKeys.length ||
-        nextKeys.some((key) => JSON.stringify(showdownSelections[Number(key)] || []) !== JSON.stringify(nextSelections[Number(key)] || []));
-
-    if (changed) {
-        showdownSelections = nextSelections;
-    }
-});
-
-$effect(() => {
-    if (!autoCheckRequested) {
-        return;
-    }
-
-    const me = getMyPlayer();
-    if (!gameState || !me || !me.isActive || me.hasFolded || gameState.phase === "waiting" || gameState.phase === "showdown") {
+    if (!autoCheckRequested) return;
+    if (isMyTurn) {
         autoCheckRequested = false;
-        return;
-    }
-
-    if (!me.isCurrentTurn && gameState.currentBet !== me.currentBet) {
-        autoCheckRequested = false;
-        return;
-    }
-
-    if (me.isCurrentTurn) {
-        if (canPerformAction("check")) {
-            autoCheckRequested = false;
-            performAction("check");
-            return;
-        }
-
+        if (canPerformAction("check")) performAction("check");
+    } else if (!canQueueCheck) {
         autoCheckRequested = false;
     }
 });
@@ -212,9 +206,8 @@ function disconnectPeerManager() {
 
 function setGameSnapshot(snapshot: GameSnapshot) {
     gameSnapshot = snapshot;
-    gameState = snapshot.state;
     if (import.meta.env.DEV) {
-        (window as Window & { __pokerGameState?: GameState }).__pokerGameState = snapshot.state;
+        (window as Window & { __pokerGameState?: unknown }).__pokerGameState = snapshot.state;
     }
 }
 
@@ -240,18 +233,15 @@ function dispatchTrustedCommand(
     publish = true,
 ): PokerEngineResult | null {
     if (!gameEngine || !localPlayerId || persistenceFailed) return null;
-    const snapshot = gameEngine.snapshot();
     const result = gameEngine.dispatch(
         {
             id: crypto.randomUUID(),
-            expectedRevision: snapshot.revision,
+            expectedRevision: gameEngine.snapshot().revision,
             payload: command,
         },
         { actorId: localPlayerId, trusted: true },
     );
-    if (!result.accepted) return result;
-    setGameSnapshot(result.snapshot);
-    if (publish && !publishCurrentState()) return null;
+    if (result.accepted && publish && !publishCurrentState()) return null;
     return result;
 }
 
@@ -261,7 +251,7 @@ function persistHistory() {
         version: SAVED_GAME_VERSION,
         config: pokerGameConfig,
         history: gameEngine.history(),
-        dealer: getSavedDealerState(),
+        dealer: dealer ?? undefined,
     });
 }
 
@@ -298,10 +288,13 @@ function restoreSavedHostGame(savedGame: SavedGame | null): boolean {
         const restoredEngine = new GameEngine(new PokerGame(savedGame.config), {
             history: savedGame.history,
         });
-        restoreDealerState(savedGame.dealer, restoredEngine.snapshot().state);
+        const snapshot = restoredEngine.snapshot();
+        dealer = restoreDealer(savedGame.dealer, snapshot.state);
+        localHoleCards = (dealer && holeCardsFor(dealer, localPlayerId)) || [];
+        localHoleRound = dealer ? snapshot.state.round : 0;
         pokerGameConfig = savedGame.config;
         gameEngine = restoredEngine;
-        setGameSnapshot(restoredEngine.snapshot());
+        setGameSnapshot(snapshot);
         return true;
     } catch (error) {
         console.error("Failed to restore saved host game:", error);
@@ -311,7 +304,6 @@ function restoreSavedHostGame(savedGame: SavedGame | null): boolean {
         pokerGameConfig = null;
         gameEngine = null;
         gameSnapshot = null;
-        gameState = null;
         isHost = false;
         isLoading = false;
         errorMessage = "The saved game is invalid and has been cleared.";
@@ -356,12 +348,12 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
                 return;
             }
 
-            if (gameState.players.length >= 10) {
+            if (gameState.players.length >= MAX_PLAYERS) {
                 peerManager?.sendToPeer(fromPeerId, {
                     type: "joinResponse",
                     requestId: message.requestId,
                     accepted: false,
-                    message: "Game is full (max 10 players)",
+                    message: `Game is full (max ${MAX_PLAYERS} players)`,
                 });
                 return;
             }
@@ -411,11 +403,7 @@ function handleHostMessage(message: PeerMessage, fromPeerId: string) {
             const processed = gameEngine.dispatch(toEngineCommand(message), {
                 actorId: fromPeerId,
             });
-            if (
-                processed.accepted &&
-                !processed.duplicate &&
-                !commitProcessedCommand(processed)
-            ) {
+            if (processed.accepted && !processed.duplicate && !commitProcessedCommand()) {
                 break;
             }
             peerManager?.sendPrivateToPeer(fromPeerId, toCommandResultMessage(processed));
@@ -448,25 +436,17 @@ function applyHostAction(
     );
     if (!processed.accepted) return false;
 
-    return commitProcessedCommand(processed);
+    return commitProcessedCommand();
 }
 
-function commitProcessedCommand(processed: PokerEngineResult): boolean {
-    setGameSnapshot(processed.snapshot);
+function commitProcessedCommand(): boolean {
     if (!publishCurrentState()) return false;
     scheduleAutomaticPhaseAdvance();
     return true;
 }
 
 function scheduleAutomaticPhaseAdvance() {
-    if (
-        !isHost ||
-        !gameSnapshot ||
-        !gameState ||
-        gameState.phase === "waiting" ||
-        gameState.phase === "showdown" ||
-        !isBettingRoundComplete(gameState)
-    ) {
+    if (!isHost || !gameSnapshot || !gameState || !isBettingRoundComplete(gameState)) {
         return;
     }
 
@@ -475,8 +455,6 @@ function scheduleAutomaticPhaseAdvance() {
         if (
             gameSnapshot?.revision === expectedRevision &&
             gameState &&
-            gameState.phase !== "waiting" &&
-            gameState.phase !== "showdown" &&
             isBettingRoundComplete(gameState)
         ) {
             advanceHostPhase();
@@ -538,10 +516,8 @@ function handleClientMessage(message: PeerMessage, _fromPeerId: string) {
     }
 }
 
-function applyIncomingSnapshot(snapshot: GameSnapshot): boolean {
-    if (!shouldApplyState(gameSnapshot, snapshot)) {
-        return false;
-    }
+function applyIncomingSnapshot(snapshot: GameSnapshot) {
+    if (gameSnapshot && snapshot.revision <= gameSnapshot.revision) return;
 
     setGameSnapshot(snapshot);
     if (
@@ -559,7 +535,6 @@ function applyIncomingSnapshot(snapshot: GameSnapshot): boolean {
     ) {
         scheduleHoleCardRequests(snapshot.state.round);
     }
-    return true;
 }
 
 function handleConnectionChange(peerId: string, connected: boolean) {
@@ -576,7 +551,7 @@ function handleConnectionChange(peerId: string, connected: boolean) {
     }
 
     if (!isHost) {
-        if (gameState.players.find((player) => player.isHost)?.id === peerId) {
+        if (gameState.hostId === peerId) {
             isConnectedToGame = false;
         }
         return;
@@ -595,20 +570,19 @@ async function createGame() {
     errorMessage = "";
     isLoading = true;
     persistenceFailed = false;
+    dealer = null;
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
     isHost = true;
 
     try {
         const peerId = getStablePeerId();
-        await peerManager.createHost(peerId);
+        roomCode = await peerManager.createHost(peerId);
         isConnectedToGame = true;
         localPlayerId = peerId;
-        roomCode = peerManager.getRoomCode();
 
         const config: GameConfig = { mode: gameMode, startingChips, smallBlind, bigBlind, ante };
         pokerGameConfig = { game: config, hostPlayerName: playerName, hostPeerId: peerId };
         gameEngine = new GameEngine(new PokerGame(pokerGameConfig));
-        setGameSnapshot(gameEngine.snapshot());
         publishCurrentState();
         saveSession({ isHost: true, roomCode, playerName });
         isLoading = false;
@@ -646,7 +620,6 @@ async function joinGame() {
     errorMessage = "";
     isLoading = true;
     gameSnapshot = null;
-    gameState = null;
     peerManager = new PeerManager(handlePeerMessage, handleConnectionChange);
     isHost = false;
     roomCode = joinCode.trim();
@@ -684,72 +657,14 @@ function startHand() {
     const result = dispatchTrustedCommand({ type: "start-hand" }, false);
     if (!result?.accepted) return;
 
+    const state = result.snapshot.state;
+    dealer = state.config.mode === "digital" ? dealHand(state) : null;
     localHoleCards = [];
     localHoleRound = 0;
-    hostDeck = [];
-    hostHoleCards = new Map();
-
-    if (gameState?.config.mode === "digital" && gameState.phase === "preflop") {
-        hostDeck = createShuffledDeck();
-        for (const player of gameState.players.filter((entry) => entry.isActive)) {
-            hostHoleCards.set(player.id, [hostDeck.pop()!, hostDeck.pop()!]);
-        }
-    }
 
     if (!publishCurrentState()) return;
-    for (const playerId of hostHoleCards.keys()) sendHoleCards(playerId);
+    for (const [playerId] of dealer?.hands ?? []) sendHoleCards(playerId);
     scheduleAutomaticPhaseAdvance();
-}
-
-function getSavedDealerState(): SavedDealerState | undefined {
-    if (
-        !gameState ||
-        gameState.config.mode !== "digital" ||
-        gameState.phase === "waiting" ||
-        hostHoleCards.size === 0
-    ) {
-        return undefined;
-    }
-
-    return {
-        round: gameState.round,
-        deck: [...hostDeck],
-        hands: [...hostHoleCards].map(([playerId, cards]) => [playerId, [...cards]]),
-    };
-}
-
-function restoreDealerState(saved: SavedDealerState | undefined, state: GameState) {
-    hostDeck = [];
-    hostHoleCards = new Map();
-    localHoleCards = [];
-    localHoleRound = 0;
-    if (state.config.mode !== "digital" || state.phase === "waiting") return;
-    if (!saved || saved.round !== state.round) {
-        throw new Error("Missing digital dealer state");
-    }
-
-    const hands = new Map(saved.hands);
-    const activePlayerIds = state.players
-        .filter((player) => player.isActive)
-        .map((player) => player.id);
-    const allCards = [...saved.deck, ...saved.hands.flatMap(([, cards]) => cards), ...state.communityCards];
-    if (
-        hands.size !== saved.hands.length ||
-        hands.size !== activePlayerIds.length ||
-        activePlayerIds.some((playerId) => hands.get(playerId)?.length !== 2) ||
-        allCards.length !== 52 ||
-        allCards.some((card) => !/^[2-9TJQKA][cdhs]$/.test(card)) ||
-        new Set(allCards).size !== allCards.length
-    ) {
-        throw new Error("Invalid digital dealer state");
-    }
-
-    hostDeck = [...saved.deck];
-    hostHoleCards = new Map(
-        [...hands].map(([playerId, cards]) => [playerId, [...cards]]),
-    );
-    localHoleCards = hostHoleCards.get(localPlayerId) || [];
-    localHoleRound = state.round;
 }
 
 function scheduleHoleCardRequests(round: number) {
@@ -762,9 +677,7 @@ function scheduleHoleCardRequests(round: number) {
 
 function requestHoleCards() {
     if (!gameState || isHost) return;
-    const hostId = gameState.players.find((player) => player.isHost)?.id;
-    if (!hostId) return;
-    peerManager?.sendToPeer(hostId, {
+    peerManager?.sendToPeer(gameState.hostId, {
         type: "requestHoleCards",
         playerId: localPlayerId,
         round: gameState.round,
@@ -772,9 +685,8 @@ function requestHoleCards() {
 }
 
 function sendHoleCards(playerId: string) {
-    if (!gameState || gameState.config.mode !== "digital") return;
-    const cards = hostHoleCards.get(playerId);
-    if (!cards) return;
+    const cards = dealer && holeCardsFor(dealer, playerId);
+    if (!gameState || !cards) return;
     if (playerId === localPlayerId) {
         localHoleCards = cards;
         localHoleRound = gameState.round;
@@ -789,76 +701,18 @@ function sendHoleCards(playerId: string) {
 
 function advanceHostPhase() {
     if (!gameState) return;
-    const previousPhase = gameState.phase;
-    const nextDeck = [...hostDeck];
-    const cards: Card[] = [];
-    let showdown: { winnersByPot: string[][]; revealedHands: RevealedHand[] } | undefined;
-
-    if (gameState.config.mode === "digital") {
-        const drawCount =
-            previousPhase === "preflop"
-                ? 3
-                : previousPhase === "flop" || previousPhase === "turn"
-                  ? 1
-                  : 0;
-        for (let index = 0; index < drawCount; index++) {
-            const card = nextDeck.pop();
-            if (!card) {
-                errorMessage = "The saved digital deck is incomplete.";
-                return;
-            }
-            cards.push(card);
-        }
-        if (previousPhase === "river") showdown = calculateDigitalShowdown();
-    }
+    const draw = dealer ? drawCommunityCards(dealer, gameState.phase) : { cards: [], deck: [] };
+    const showdown: Partial<Showdown> =
+        dealer && gameState.phase === "river" ? resolveShowdown(gameState, dealer) : {};
 
     const result = dispatchTrustedCommand(
-        {
-            type: "advance-phase",
-            cards,
-            winnersByPot: showdown?.winnersByPot,
-            revealedHands: showdown?.revealedHands,
-        },
+        { type: "advance-phase", cards: draw.cards, ...showdown },
         false,
     );
     if (!result?.accepted) return;
-    hostDeck = nextDeck;
+    if (dealer) dealer = { ...dealer, deck: draw.deck };
     if (!publishCurrentState()) return;
     scheduleAutomaticPhaseAdvance();
-}
-
-function calculateDigitalShowdown(): {
-    winnersByPot: string[][];
-    revealedHands: RevealedHand[];
-} {
-    if (!gameState || gameState.pot === 0) return { winnersByPot: [], revealedHands: [] };
-    const pots = calculatePotAllocations(gameState);
-    const winnersByPot = pots.map((pot) => {
-        const eligible = pot.eligiblePlayerIds.filter((id) => hostHoleCards.has(id));
-        let winners: string[] = [];
-        for (const playerId of eligible) {
-            if (winners.length === 0) winners = [playerId];
-            else {
-                const comparison = compareHands(
-                    [...hostHoleCards.get(playerId)!, ...gameState!.communityCards],
-                    [...hostHoleCards.get(winners[0]!)!, ...gameState!.communityCards],
-                );
-                if (comparison > 0) winners = [playerId];
-                else if (comparison === 0) winners.push(playerId);
-            }
-        }
-        return winners;
-    });
-    const revealedIds = new Set(winnersByPot.flat());
-    const revealedHands = [...revealedIds].map((playerId) => {
-        const cards = hostHoleCards.get(playerId)!;
-        return {
-            playerId,
-            cards,
-            handName: evaluateHand([...cards, ...gameState!.communityCards]).name,
-        };
-    });
-    return { winnersByPot, revealedHands };
 }
 
 function performAction(action: PlayerAction) {
@@ -875,22 +729,19 @@ function performAction(action: PlayerAction) {
         return;
     }
 
-    const hostId = gameState.players.find((player) => player.isHost)?.id;
-    if (hostId) {
-        const message: ActionMessage = {
-            type: "action",
-            commandId: crypto.randomUUID(),
-            playerId: localPlayerId,
-            round: gameState.round,
-            expectedRevision: gameSnapshot.revision,
-            action,
-            amount,
-        };
-        pendingCommand = { message, targetRevision: null };
-        peerManager?.sendToPeer(hostId, message);
-        scheduleCommandRetry(hostId, message);
-        if (action === "raise") raiseAmount = undefined;
-    }
+    const message: ActionMessage = {
+        type: "action",
+        commandId: crypto.randomUUID(),
+        playerId: localPlayerId,
+        round: gameState.round,
+        expectedRevision: gameSnapshot.revision,
+        action,
+        amount,
+    };
+    pendingCommand = { message, targetRevision: null };
+    peerManager?.sendToPeer(gameState.hostId, message);
+    scheduleCommandRetry(gameState.hostId, message);
+    if (action === "raise") raiseAmount = undefined;
 }
 
 function scheduleCommandRetry(hostId: string, message: ActionMessage) {
@@ -921,80 +772,9 @@ function describeCommandRejection(reason: string | undefined): string {
     }
 }
 
-function getMyPlayer(): Player | null {
-    if (!gameState) return null;
-    return gameState.players.find((p) => p.id === localPlayerId) || null;
-}
-
-function canPerformAction(action: "fold" | "check" | "call" | "raise" | "allin"): boolean {
-    const me = getMyPlayer();
+function canPerformAction(action: PlayerAction): boolean {
     if (!me || !gameState || (!isHost && !isConnectedToGame)) return false;
     return getValidActions(gameState, me).includes(action);
-}
-
-function calculateToCall(): number {
-    const me = getMyPlayer();
-    if (!me || !gameState) return 0;
-    return gameState.currentBet - me.currentBet;
-}
-
-function canQueueCheck(): boolean {
-    const me = getMyPlayer();
-    if (!me || !gameState) {
-        return false;
-    }
-
-    if (!me.isActive || me.hasFolded || me.isCurrentTurn || gameState.phase === "waiting" || gameState.phase === "showdown") {
-        return false;
-    }
-
-    return gameState.currentBet === me.currentBet;
-}
-
-function toggleAutoCheck() {
-    if (!canQueueCheck()) {
-        autoCheckRequested = false;
-        return;
-    }
-
-    autoCheckRequested = !autoCheckRequested;
-}
-
-function shouldShowWaitingCheck(): boolean {
-    const me = getMyPlayer();
-    if (!me || !gameState) {
-        return false;
-    }
-
-    return me.isActive && !me.hasFolded && !me.isCurrentTurn && gameState.phase !== "waiting" && gameState.phase !== "showdown";
-}
-
-function calculateMinRaise(): number {
-    if (!gameState) return 0;
-    return gameState.currentBet + gameState.minRaise;
-}
-
-function showHostAdvanceButton(): boolean {
-    if (!gameState || !isHost) {
-        return false;
-    }
-
-    return gameState.phase === "showdown" && gameState.pot === 0;
-}
-
-function getOutcomePlayers(): Player[] {
-    if (!gameState) {
-        return [];
-    }
-
-    return gameState.players.filter((player) => player.isActive && !player.hasFolded);
-}
-
-function getPotAllocations() {
-    if (!gameState) {
-        return [];
-    }
-    return calculatePotAllocations(gameState);
 }
 
 function togglePotWinner(potIndex: number, playerId: string) {
@@ -1006,23 +786,15 @@ function togglePotWinner(potIndex: number, playerId: string) {
     };
 }
 
-function canRecordOutcome(): boolean {
-    const pots = getPotAllocations();
-    return pots.length > 0 && pots.every((_, index) => (showdownSelections[index] || []).length > 0);
-}
-
 function recordOutcome() {
-    if (!gameState || !isHost) {
-        return;
-    }
-
-    const winnersByPot = getPotAllocations().map((_, index) => showdownSelections[index] || []);
+    const winnersByPot = potAllocations.map((_, index) => showdownSelections[index] ?? []);
     const result = dispatchTrustedCommand({ type: "record-outcome", winnersByPot });
     if (!result?.accepted) {
         errorMessage = "Select at least one eligible winner for each pot.";
         return;
     }
 
+    showdownSelections = {};
     errorMessage = "";
 }
 
@@ -1042,7 +814,7 @@ async function leaveGame() {
     await new Promise((resolve) => setTimeout(resolve, 100));
     disconnectPeerManager();
     gameSnapshot = null;
-    gameState = null;
+    showdownSelections = {};
     isHost = false;
     localPlayerId = "";
     roomCode = "";
@@ -1052,16 +824,17 @@ async function leaveGame() {
     clearGame();
     clearSession();
 }
-
-function nextPhase() {
-    if (!gameState || !isHost) return;
-    if (gameState.phase === "showdown") {
-        startHand();
-    } else {
-        advanceHostPhase();
-    }
-}
 </script>
+
+{#snippet errorBanner()}
+    {#if errorMessage}
+        <p class="mb-4 rounded-2xl bg-red-500/10 border border-red-400/20 px-4 py-3 text-sm text-red-200">{errorMessage}</p>
+    {/if}
+{/snippet}
+
+{#snippet playingCard(card: Card)}
+    <div class={`w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-xl md:text-3xl font-serif font-black shadow-md ring-1 ring-black/5 ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
+{/snippet}
 
 <main class="w-full max-w-5xl mx-auto p-4 min-h-screen text-white">
     {#if route.name === "home" && !isLoading}
@@ -1085,9 +858,7 @@ function nextPhase() {
                     />
                 </div>
 
-                {#if errorMessage}
-                    <p class="mb-4 rounded-2xl bg-red-500/10 border border-red-400/20 px-4 py-3 text-red-200">{errorMessage}</p>
-                {/if}
+                {@render errorBanner()}
 
                 <div class="space-y-3">
                     <button class="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-extrabold shadow-lg shadow-emerald-950/25 transition" onclick={() => navigate({ name: "create" })}>
@@ -1161,9 +932,7 @@ function nextPhase() {
                     </div>
                 </div>
 
-                {#if errorMessage}
-                    <p class="text-red-200 mb-4 text-sm rounded-2xl bg-red-500/10 border border-red-400/20 px-4 py-3">{errorMessage}</p>
-                {/if}
+                {@render errorBanner()}
 
                 <div class="space-y-3">
                     <button class="w-full py-3.5 bg-emerald-500 text-emerald-950 rounded-2xl hover:bg-emerald-400 transition font-extrabold shadow-lg shadow-emerald-950/25" onclick={createGame}>
@@ -1204,9 +973,7 @@ function nextPhase() {
                     />
                 </div>
 
-                {#if errorMessage}
-                    <p class="text-red-200 mb-4 text-sm rounded-2xl bg-red-500/10 border border-red-400/20 px-4 py-3">{errorMessage}</p>
-                {/if}
+                {@render errorBanner()}
 
                 <div class="space-y-3">
                     <button class="w-full py-3.5 bg-emerald-500 text-emerald-950 rounded-2xl hover:bg-emerald-400 transition font-extrabold shadow-lg shadow-emerald-950/25" onclick={joinGame}>
@@ -1259,20 +1026,18 @@ function nextPhase() {
                         </div>
 
                         <div class="bg-slate-950/45 border border-white/10 p-6 rounded-3xl mb-6 text-left">
-                            <h3 class="font-bold mb-3 text-white">Players ({gameState.players.length}/10)</h3>
+                            <h3 class="font-bold mb-3 text-white">Players ({gameState.players.length}/{MAX_PLAYERS})</h3>
                             {#each gameState.players as player}
                                 <div class="flex justify-between items-center py-3 border-b last:border-0 border-white/10">
                                     <span class="font-medium text-slate-100">{player.name}</span>
-                                    <span class="text-slate-400 text-sm">{#if player.isHost}(Host){/if}</span>
+                                    <span class="text-slate-400 text-sm">{#if player.id === gameState.hostId}(Host){/if}</span>
                                 </div>
                             {/each}
                         </div>
 
                         {#if isHost}
                             <div class="space-y-3">
-                                {#if errorMessage}
-                                    <p class="text-red-200 rounded-2xl bg-red-500/10 border border-red-400/20 px-4 py-3">{errorMessage}</p>
-                                {/if}
+                                {@render errorBanner()}
                                 <button class="w-full py-3.5 bg-emerald-500 text-emerald-950 rounded-2xl hover:bg-emerald-400 font-extrabold shadow-lg shadow-emerald-950/25 transition" onclick={startGame}>
                                     Start Game
                                 </button>
@@ -1285,7 +1050,7 @@ function nextPhase() {
                         {#if errorMessage}
                             <p class="mb-4 text-red-100 rounded-2xl bg-red-950/60 border border-red-300/30 px-4 py-3">{errorMessage}</p>
                         {/if}
-                        {#if !(isHost && gameState.phase === "showdown" && gameState.pot > 0)}
+                        {#if !isRecordingOutcome}
                             <div class="flex justify-between items-center mb-6">
                                 <div class="bg-black/15 backdrop-blur-sm rounded-2xl px-4 py-3 shadow-lg">
                                     <span class="text-xs font-semibold uppercase tracking-[0.2em] text-white/75">Pot</span>
@@ -1295,13 +1060,11 @@ function nextPhase() {
                                     <span class="uppercase font-extrabold tracking-[0.18em] text-sm">{gameState.phase}</span>
                                 </div>
                             </div>
-                        {/if}
 
-                        {#if !(isHost && gameState.phase === "showdown" && gameState.pot > 0)}
                             <div class="flex gap-2 justify-center mb-6 min-h-16">
                                 {#if gameState.config.mode === "digital"}
                                     {#each gameState.communityCards as card}
-                                        <div class={`w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-xl md:text-3xl font-serif font-black shadow-md ring-1 ring-black/5 ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
+                                        {@render playingCard(card)}
                                     {/each}
                                 {:else}
                                     {#each Array(gameState.phase === "flop" ? 3 : gameState.phase === "turn" ? 4 : gameState.phase === "river" || gameState.phase === "showdown" ? 5 : 0) as _}
@@ -1315,27 +1078,26 @@ function nextPhase() {
                                     <span class="text-xs uppercase tracking-[0.18em] text-white/75 font-bold mb-2">Your hand</span>
                                     <div class="flex gap-2">
                                         {#each localHoleCards as card}
-                                            <div class={`w-12 h-16 md:w-20 md:h-28 bg-white rounded-lg flex items-center justify-center text-xl md:text-3xl font-serif font-black shadow-lg ${card[1] === "h" || card[1] === "d" ? "text-red-600" : "text-slate-900"}`}>{formatCard(card)}</div>
+                                            {@render playingCard(card)}
                                         {/each}
                                     </div>
                                 </div>
                             {/if}
-                        {/if}
 
-                        {#if gameState.statusMessage && !(isHost && gameState.phase === "showdown" && gameState.pot > 0)}
-                            <div class="text-center mb-4 text-sm text-white/95 font-semibold bg-black/10 rounded-full px-4 py-2 max-w-fit mx-auto shadow-sm">
-                                {gameState.statusMessage}
-                            </div>
-                        {/if}
+                            {#if gameState.statusMessage}
+                                <div class="text-center mb-4 text-sm text-white/95 font-semibold bg-black/10 rounded-full px-4 py-2 max-w-fit mx-auto shadow-sm">
+                                    {gameState.statusMessage}
+                                </div>
+                            {/if}
 
-                        {#if isHost && gameState.phase === "showdown" && gameState.pot > 0}
+                        {:else}
                             <div class="bg-black/12 backdrop-blur-sm rounded-2xl p-5 shadow-lg ring-1 ring-white/10 mb-6">
                                 <div class="space-y-4">
                                     <div class="text-center">
                                         <div class="text-white text-2xl font-extrabold tracking-tight">Record outcome</div>
                                         <p class="mt-1 text-sm text-white/70">Select the winner for each pot. Choose multiple players to split a pot.</p>
                                     </div>
-                                    {#each getPotAllocations() as pot, index}
+                                    {#each potAllocations as pot, index}
                                         <div class="rounded-3xl bg-black/12 p-5 shadow-lg ring-1 ring-white/10 space-y-4">
                                             <div class="flex items-start justify-between gap-3 flex-wrap">
                                                 <div>
@@ -1381,13 +1143,13 @@ function nextPhase() {
                                     {/each}
                                     <div class="flex flex-col items-center pt-1 gap-2">
                                         <button
-                                            class={`min-w-56 py-3.5 px-6 rounded-2xl font-extrabold transition-colors ${canRecordOutcome() ? "bg-blue-600 hover:bg-blue-700 text-white shadow-lg" : "bg-white/10 text-white/45 shadow-none"}`}
-                                            disabled={!canRecordOutcome()}
+                                            class={`min-w-56 py-3.5 px-6 rounded-2xl font-extrabold transition-colors ${canRecordOutcome ? "bg-blue-600 hover:bg-blue-700 text-white shadow-lg" : "bg-white/10 text-white/45 shadow-none"}`}
+                                            disabled={!canRecordOutcome}
                                             onclick={recordOutcome}
                                         >
                                             Record Outcome
                                         </button>
-                                        <p class={`text-sm text-white/65 ${canRecordOutcome() ? "invisible" : "visible"}`}>
+                                        <p class={`text-sm text-white/65 ${canRecordOutcome ? "invisible" : "visible"}`}>
                                             Select at least one winner for each pot to continue.
                                         </p>
                                     </div>
@@ -1399,14 +1161,14 @@ function nextPhase() {
                             {#each gameState.players as player}
                                 {@const revealed = gameState.revealedHands.find((hand) => hand.playerId === player.id)}
                                 <div class="bg-white rounded-2xl p-4 text-center relative shadow-lg ring-1 ring-black/5 transition-all"
-                                     class:ring-4={player.isCurrentTurn}
-                                     class:ring-yellow-300={player.isCurrentTurn}
+                                     class:ring-4={player.id === gameState.currentPlayerId}
+                                     class:ring-yellow-300={player.id === gameState.currentPlayerId}
                                      class:opacity-55={player.hasFolded}>
                                     <div class="flex items-center justify-center gap-1.5 mb-2 flex-wrap">
                                         <span class="font-semibold text-sm truncate text-slate-900">{player.name}</span>
-                                        {#if player.isDealer}<span title="Dealer" class="text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">D</span>{/if}
-                                        {#if player.isSmallBlind}<span title="Small blind" class="text-xs bg-orange-500 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">SB</span>{/if}
-                                        {#if player.isBigBlind}<span title="Big blind" class="text-xs bg-red-600 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">BB</span>{/if}
+                                        {#if player.id === gameState.dealerId}<span title="Dealer" class="text-xs bg-blue-500 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">D</span>{/if}
+                                        {#if player.id === gameState.smallBlindId}<span title="Small blind" class="text-xs bg-orange-500 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">SB</span>{/if}
+                                        {#if player.id === gameState.bigBlindId}<span title="Big blind" class="text-xs bg-red-600 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">BB</span>{/if}
                                     </div>
                                     <div class="text-2xl font-extrabold text-slate-900 tracking-tight">{player.chips}</div>
                                     <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500 mt-1">chips</div>
@@ -1437,10 +1199,10 @@ function nextPhase() {
                             {#if commandFeedback}
                                 <p class="text-center text-amber-100 font-semibold mb-3" aria-live="polite">{commandFeedback}</p>
                             {/if}
-                            {#if getMyPlayer()?.isCurrentTurn}
+                            {#if isMyTurn}
                                 <div>
                                     <div class="text-center mb-4">
-                                        <span class="text-white text-2xl font-semibold">To call: {calculateToCall()}</span>
+                                        <span class="text-white text-2xl font-semibold">To call: {toCall}</span>
                                         {#if canPerformAction("raise")}
                                             <div class="mt-2">
                                                 <input 
@@ -1448,8 +1210,8 @@ function nextPhase() {
                                                     inputmode="numeric"
                                                     pattern="[0-9]*"
                                                     bind:value={raiseAmount}
-                                                    min={calculateMinRaise()}
-                                                    max={(getMyPlayer()?.chips || 0) + (getMyPlayer()?.currentBet || 0)}
+                                                    min={gameState.currentBet + gameState.minRaise}
+                                                    max={(me?.chips ?? 0) + (me?.currentBet ?? 0)}
                                                     step="1"
                                                     placeholder="Raise amount"
                                                     disabled={pendingCommand !== null}
@@ -1465,49 +1227,36 @@ function nextPhase() {
                                         </p>
                                     {/if}
                                     <div class="flex flex-wrap gap-2 justify-center">
-                                        {#if canPerformAction("fold")}
-                                            <button data-action="fold" disabled={pendingCommand !== null} class="py-2 px-4 bg-red-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("fold")}>
-                                                Fold
-                                            </button>
-                                        {/if}
-                                        {#if canPerformAction("check")}
-                                            <button data-action="check" disabled={pendingCommand !== null} class="py-2 px-4 bg-gray-400 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("check")}>
-                                                Check
-                                            </button>
-                                        {/if}
-                                        {#if canPerformAction("call")}
-                                            <button data-action="call" disabled={pendingCommand !== null} class="py-2 px-4 bg-blue-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("call")}>
-                                                Call {calculateToCall()}
-                                            </button>
-                                        {/if}
-                                        {#if canPerformAction("raise")}
-                                            <button data-action="raise" disabled={pendingCommand !== null || raiseAmount === undefined} class="py-2 px-4 bg-purple-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("raise")}>
-                                                Raise
-                                            </button>
-                                        {/if}
-                                        {#if canPerformAction("allin")}
-                                            <button data-action="allin" disabled={pendingCommand !== null} class="py-2 px-4 bg-yellow-500 text-white rounded-lg font-bold disabled:opacity-60" onclick={() => performAction("allin")}>
-                                                All In
-                                            </button>
-                                        {/if}
+                                        {#each ACTION_BUTTONS as button}
+                                            {#if canPerformAction(button.action)}
+                                                <button
+                                                    data-action={button.action}
+                                                    disabled={pendingCommand !== null || (button.action === "raise" && raiseAmount === undefined)}
+                                                    class={`py-2 px-4 ${button.color} text-white rounded-lg font-bold disabled:opacity-60`}
+                                                    onclick={() => performAction(button.action)}
+                                                >
+                                                    {button.action === "call" ? `Call ${toCall}` : button.label}
+                                                </button>
+                                            {/if}
+                                        {/each}
                                     </div>
                                 </div>
-                            {:else if isHost && gameState.phase === "showdown" && gameState.pot > 0}
+                            {:else if isRecordingOutcome}
                                 <p class="text-center italic text-white/80 font-medium">{gameState.config.mode === "digital" ? "Calculating the showdown…" : "Choose the showdown winner above."}</p>
-                            {:else if isHost && showHostAdvanceButton()}
+                            {:else if isHost && gameState.phase === "showdown"}
                                 <div class="text-center">
-                                    <button class="py-3 px-6 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md transition-colors" onclick={nextPhase}>
+                                    <button class="py-3 px-6 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md transition-colors" onclick={startHand}>
                                         New Hand
                                     </button>
                                 </div>
                             {:else}
                                 <div class="flex flex-col items-center gap-3">
-                                    {#if shouldShowWaitingCheck()}
+                                    {#if isWaitingForTurn}
                                         <button
-                                            class={`min-w-44 py-3 px-5 rounded-xl font-bold transition-colors ${canQueueCheck() ? (autoCheckRequested ? "bg-emerald-500 hover:bg-emerald-400 text-white shadow-md" : "bg-white/90 hover:bg-white text-emerald-950 shadow-md") : "bg-white/10 text-white/45 shadow-none"}`}
+                                            class={`min-w-44 py-3 px-5 rounded-xl font-bold transition-colors ${canQueueCheck ? (autoCheckRequested ? "bg-emerald-500 hover:bg-emerald-400 text-white shadow-md" : "bg-white/90 hover:bg-white text-emerald-950 shadow-md") : "bg-white/10 text-white/45 shadow-none"}`}
                                             data-queue-check
-                                            disabled={!canQueueCheck()}
-                                            onclick={toggleAutoCheck}
+                                            disabled={!canQueueCheck}
+                                            onclick={() => (autoCheckRequested = !autoCheckRequested)}
                                         >
                                             Check
                                         </button>

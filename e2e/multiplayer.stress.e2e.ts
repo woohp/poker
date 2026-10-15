@@ -6,29 +6,14 @@ import {
     type Page,
     type TestInfo,
 } from "@playwright/test";
+import { isBettingRoundComplete } from "../src/lib/gameLogic";
+import type { GameState } from "../src/lib/types";
+import { createRoom, joinRoom } from "./helpers";
 
 const HAND_COUNT = Number(process.env.POKER_STRESS_HANDS || 100);
 const PLAYER_COUNT = Number(process.env.POKER_STRESS_PLAYERS || 4);
 const SEED = Number(process.env.POKER_STRESS_SEED || 20260320);
 const STARTING_CHIPS = 1_000_000;
-
-interface StoredPlayer {
-    chips: number;
-    currentBet: number;
-    handContribution: number;
-    isActive: boolean;
-    hasFolded: boolean;
-    hasActed: boolean;
-    isCurrentTurn: boolean;
-}
-
-interface StoredState {
-    phase: string;
-    pot: number;
-    currentBet: number;
-    round: number;
-    players: StoredPlayer[];
-}
 
 interface BotTable {
     contexts: BrowserContext[];
@@ -82,23 +67,12 @@ async function createTable(browser: Browser, playerCount: number): Promise<BotTa
     for (const page of pages) page.setDefaultTimeout(5_000);
     const host = pages[0]!;
 
-    await host.goto("./");
-    await host.getByLabel("Your name").fill("Bot 1");
-    await host.getByText("Create Game", { exact: true }).click();
-    await host.getByText("Digital cards", { exact: true }).click();
-    await host.getByLabel("Starting Chips").fill(String(STARTING_CHIPS));
-    await host.getByText("Create Room", { exact: true }).click();
-    await host.waitForURL(/#\/room\//);
-    const roomCode = host.url().split("/").at(-1)!;
-
+    const roomCode = await createRoom(host, "Bot 1", {
+        digital: true,
+        startingChips: STARTING_CHIPS,
+    });
     for (let index = 1; index < pages.length; index++) {
-        const page = pages[index]!;
-        await page.goto(`./#/join/${roomCode}`);
-        await page.getByLabel("Your name").fill(`Bot ${index + 1}`);
-        await page.getByText("Join", { exact: true }).click();
-        await expect(host.getByText(`Players (${index + 1}/10)`)).toBeVisible({
-            timeout: 15_000,
-        });
+        await joinRoom(host, pages[index]!, roomCode, `Bot ${index + 1}`, index + 1);
     }
 
     await host.getByText("Start Game", { exact: true }).click();
@@ -170,7 +144,7 @@ async function findCurrentPlayerPage(pages: Page[]): Promise<Page | null> {
                     }
 
                     const currentPlayerIndex = state.players.findIndex(
-                        (player) => player.isCurrentTurn,
+                        (player) => player.id === state.currentPlayerId,
                     );
                     current = pages[currentPlayerIndex];
                     if (
@@ -270,7 +244,7 @@ async function waitForConvergence(pages: Page[]): Promise<void> {
         .toBe(1);
 }
 
-async function readStateWithTimeout(page: Page, playerIndex: number): Promise<StoredState> {
+async function readStateWithTimeout(page: Page, playerIndex: number): Promise<GameState> {
     return Promise.race([
         readState(page),
         new Promise<never>((_, reject) => {
@@ -282,11 +256,11 @@ async function readStateWithTimeout(page: Page, playerIndex: number): Promise<St
     ]);
 }
 
-async function readState(page: Page): Promise<StoredState> {
+async function readState(page: Page): Promise<GameState> {
     return page.evaluate(() => {
         const state = (
             window as Window & {
-                __pokerGameState?: StoredState;
+                __pokerGameState?: GameState;
             }
         ).__pokerGameState;
         if (!state) throw new Error("No game state available");
@@ -294,7 +268,7 @@ async function readState(page: Page): Promise<StoredState> {
     });
 }
 
-function assertStateInvariants(state: StoredState): void {
+function assertStateInvariants(state: GameState): void {
     expect(state.pot).toBeGreaterThanOrEqual(0);
     expect(state.currentBet).toBeGreaterThanOrEqual(0);
     expect(state.players.every((player) => player.chips >= 0)).toBe(true);
@@ -303,24 +277,13 @@ function assertStateInvariants(state: StoredState): void {
         "chips plus pot must remain constant",
     ).toBe(STARTING_CHIPS * PLAYER_COUNT);
 
-    const currentPlayers = state.players.filter((player) => player.isCurrentTurn);
+    const currentPlayer = state.players.find((player) => player.id === state.currentPlayerId);
     if (state.phase === "waiting" || state.phase === "showdown") {
-        expect(currentPlayers).toHaveLength(0);
+        expect(state.currentPlayerId).toBeNull();
     } else {
-        expect(currentPlayers).toHaveLength(1);
-        expect(currentPlayers[0]!.isActive).toBe(true);
-        expect(currentPlayers[0]!.hasFolded).toBe(false);
+        expect(currentPlayer?.isActive).toBe(true);
+        expect(currentPlayer?.hasFolded).toBe(false);
     }
-}
-
-function isBettingRoundComplete(state: StoredState): boolean {
-    if (state.phase === "waiting" || state.phase === "showdown") return false;
-    return state.players
-        .filter((player) => player.isActive && !player.hasFolded)
-        .every(
-            (player) =>
-                player.chips === 0 || (player.hasActed && player.currentBet === state.currentBet),
-        );
 }
 
 function weightedChoice(

@@ -2,15 +2,17 @@ import * as Y from "yjs";
 import { NostrProvider } from "y-nostr";
 import { createPeerId, WebtorrentProvider } from "y-webtorrent";
 import { MultiProvider } from "y-multiprovider";
+import { randomId } from "./peerIdentity";
 import type { GameSnapshot, PeerMessage } from "./types";
 
 type MessageHandler = (message: PeerMessage, fromPeerId: string) => void;
 type ConnectionChangeHandler = (peerId: string, connected: boolean) => void;
+type RoomMessage = Exclude<PeerMessage, { type: "state" }>;
 interface MessageEnvelope {
     id: string;
     from: string;
     to: string | null;
-    message: Exclude<PeerMessage, { type: "state" }>;
+    message: RoomMessage;
 }
 
 const TRACKER_URLS = import.meta.env.VITE_TRACKER_URLS
@@ -26,14 +28,6 @@ const RTC_CONFIG: RTCConfiguration = {
         { urls: "stun:stun.cloudflare.com:3478" },
     ],
 };
-
-export function generateRoomCode(length = 10): string {
-    return randomId(length);
-}
-
-export function generatePeerId(length = 20): string {
-    return randomId(length);
-}
 
 export class PeerManager {
     private provider: MultiProvider | null = null;
@@ -55,36 +49,28 @@ export class PeerManager {
         this.onConnectionChange = onConnectionChange;
     }
 
-    async createHost(peerId?: string, roomCode?: string): Promise<string> {
+    /** Hosts a room and returns its room code. */
+    async createHost(peerId: string, roomCode = randomId(10)): Promise<string> {
         this.isHost = true;
-        this.localPeerId = peerId || generatePeerId();
-        this.roomCode = roomCode || generateRoomCode();
+        this.localPeerId = peerId;
+        this.roomCode = roomCode;
         await this.initializeProvider();
-        return this.localPeerId;
+        return roomCode;
     }
 
-    async joinGame(roomCode: string, playerName: string, peerId?: string): Promise<string> {
+    async joinGame(roomCode: string, playerName: string, peerId: string): Promise<void> {
         this.isHost = false;
-        this.localPeerId = peerId || generatePeerId();
+        this.localPeerId = peerId;
         this.roomCode = roomCode;
         await this.initializeProvider();
 
         this.pendingJoinRequestId = randomId(16);
-        this.messages?.push([
-            JSON.stringify({
-                id: randomId(16),
-                from: this.localPeerId,
-                to: null,
-                message: {
-                    type: "join",
-                    requestId: this.pendingJoinRequestId,
-                    playerName,
-                    peerId: this.localPeerId,
-                },
-            } satisfies MessageEnvelope),
-        ]);
-
-        return this.localPeerId;
+        this.pushMessage(null, {
+            type: "join",
+            requestId: this.pendingJoinRequestId,
+            playerName,
+            peerId,
+        });
     }
 
     private async initializeProvider(): Promise<void> {
@@ -247,28 +233,17 @@ export class PeerManager {
         return this.provider?.sendToPeer(peerId, payload) || false;
     }
 
-    sendToPeer(peerId: string, message: Exclude<PeerMessage, { type: "state" }>): void {
-        this.messages?.push([
-            JSON.stringify({
-                id: randomId(16),
-                from: this.localPeerId,
-                to: peerId,
-                message,
-            } satisfies MessageEnvelope),
-        ]);
+    sendToPeer(peerId: string, message: RoomMessage): void {
+        this.pushMessage(peerId, message);
     }
 
-    broadcast(message: Exclude<PeerMessage, { type: "state" }>, excludePeerId?: string): void {
+    private pushMessage(to: string | null, message: RoomMessage): void {
         this.messages?.push([
             JSON.stringify({
                 id: randomId(16),
                 from: this.localPeerId,
-                to: null,
-                message: excludePeerId
-                    ? {
-                          ...message,
-                      }
-                    : message,
+                to,
+                message,
             } satisfies MessageEnvelope),
         ]);
     }
@@ -278,18 +253,6 @@ export class PeerManager {
         for (const peerId of this.getAwarenessPeerIds()) {
             this.sendPrivateToPeer(peerId, { type: "state", snapshot });
         }
-    }
-
-    getLocalPeerId(): string {
-        return this.localPeerId;
-    }
-
-    getRoomCode(): string {
-        return this.roomCode;
-    }
-
-    isHostConnection(): boolean {
-        return this.isHost;
     }
 
     announceDeparture(): void {
@@ -331,16 +294,4 @@ function isWebrtcDebugEnabled(): boolean {
 function formatError(error: unknown): unknown {
     if (!(error instanceof Error)) return error;
     return { name: error.name, message: error.message, stack: error.stack };
-}
-
-function randomId(length: number): string {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-    const bytes = new Uint8Array(length);
-    crypto.getRandomValues(bytes);
-
-    let output = "";
-    for (const byte of bytes) {
-        output += alphabet[byte % alphabet.length];
-    }
-    return output;
 }

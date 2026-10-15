@@ -30,11 +30,6 @@ export interface Player {
     actedAtBet: number;
     handContribution: number;
     currentBet: number;
-    isDealer: boolean;
-    isSmallBlind: boolean;
-    isBigBlind: boolean;
-    isHost: boolean;
-    isCurrentTurn: boolean;
 }
 
 export type GamePhase = "waiting" | "preflop" | "flop" | "turn" | "river" | "showdown";
@@ -49,6 +44,11 @@ export interface GameConfig {
 
 export interface GameState {
     players: Player[];
+    hostId: string;
+    dealerId: string;
+    smallBlindId: string | null;
+    bigBlindId: string | null;
+    currentPlayerId: string | null;
     phase: GamePhase;
     pot: number;
     currentBet: number;
@@ -132,5 +132,3 @@ export type PeerMessage =
     | StateUpdateMessage
     | JoinRequestMessage
     | JoinResponseMessage;
-
-export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";

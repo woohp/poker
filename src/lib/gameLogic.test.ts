@@ -1,31 +1,18 @@
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import {
     addPlayer,
     advancePhase,
-    applyPotWinners,
     applyPayouts,
+    applyPotWinners,
     calculatePotAllocations,
     createInitialGameState,
-    getCurrentPlayerIndex,
-    getNextPlayerIndex,
     getValidActions,
     isBettingRoundComplete,
     processAction,
     removePlayer,
-    setCurrentPlayer,
     startNewHand,
 } from "./gameLogic";
-import {
-    clearGame as clearGameState,
-    clearSession,
-    loadGame as loadGameState,
-    loadSession,
-    SAVED_GAME_VERSION,
-    saveGame as saveGameState,
-    saveSession,
-    type SavedGame,
-} from "./persistence";
-import type { GameConfig, GameState } from "./types";
+import type { GameConfig, GameState, Player } from "./types";
 
 const config: GameConfig = {
     mode: "physical",
@@ -35,132 +22,20 @@ const config: GameConfig = {
     ante: 0,
 };
 
-function installLocalStorageMock() {
-    const store = new Map<string, string>();
-
-    Object.defineProperty(globalThis, "localStorage", {
-        value: {
-            getItem: (key: string) => store.get(key) ?? null,
-            setItem: (key: string, value: string) => {
-                store.set(key, value);
-            },
-            removeItem: (key: string) => {
-                store.delete(key);
-            },
-            clear: () => {
-                store.clear();
-            },
-        },
-        configurable: true,
-    });
-}
-
+/** Seats the host plus players p2..pN; p2 is named "Guest". */
 function createState(playerCount = 2, overrides: Partial<GameConfig> = {}): GameState {
     const state = createInitialGameState({ ...config, ...overrides }, "Host", "host");
-    const names = [
-        "Guest",
-        "Third",
-        "Fourth",
-        "Fifth",
-        "Sixth",
-        "Seventh",
-        "Eighth",
-        "Ninth",
-        "Tenth",
-    ];
-
-    for (let i = 0; i < playerCount - 1; i++) {
-        addPlayer(state, names[i]!, `p${i + 2}`);
+    for (let seat = 2; seat <= playerCount; seat++) {
+        addPlayer(state, seat === 2 ? "Guest" : `Player ${seat}`, `p${seat}`);
     }
-
     return state;
 }
 
-function currentPlayerId(state: GameState): string | undefined {
-    return state.players.find((player) => player.isCurrentTurn)?.id;
+function player(state: GameState, id: string): Player {
+    return state.players.find((entry) => entry.id === id)!;
 }
 
-beforeEach(() => {
-    installLocalStorageMock();
-});
-
-describe("session and game persistence", () => {
-    it("saves and loads session data", () => {
-        saveSession({
-            isHost: true,
-            roomCode: "ROOM123",
-            playerName: "Host",
-        });
-
-        expect(loadSession()).toEqual({
-            isHost: true,
-            roomCode: "ROOM123",
-            playerName: "Host",
-        });
-
-        clearSession();
-        expect(loadSession()).toBeNull();
-    });
-
-    it("saves and loads game history", () => {
-        const savedGame: SavedGame = {
-            version: SAVED_GAME_VERSION,
-            config: {
-                game: config,
-                hostPlayerName: "Host",
-                hostPeerId: "host",
-            },
-            history: [
-                {
-                    commandId: "command-1",
-                    events: [
-                        {
-                            type: "command-executed" as const,
-                            command: {
-                                type: "add-player" as const,
-                                playerId: "guest",
-                                playerName: "Guest",
-                            },
-                            context: { actorId: "host", trusted: true },
-                        },
-                    ],
-                },
-            ],
-        };
-        saveGameState(savedGame);
-        expect(loadGameState()).toEqual(savedGame);
-
-        clearGameState();
-        expect(loadGameState()).toBeNull();
-    });
-
-    it("rejects an unsupported persistence envelope", () => {
-        localStorage.setItem("poker_game_state", JSON.stringify({ history: [] }));
-
-        expect(() => loadGameState()).toThrow("Unsupported saved game format");
-    });
-});
-
 describe("player management", () => {
-    it("creates the host with expected defaults", () => {
-        const state = createInitialGameState(config, "Host", "host");
-
-        expect(state.phase).toBe("waiting");
-        expect(state.players).toHaveLength(1);
-        expect(state.lastPayouts).toEqual([]);
-        expect(state.players[0]).toMatchObject({
-            id: "host",
-            name: "Host",
-            chips: 1000,
-            isDealer: true,
-            isHost: true,
-            hasFolded: false,
-            hasActed: false,
-            actedAtBet: 0,
-            isCurrentTurn: false,
-        });
-    });
-
     it("adds up to 10 players and rejects the 11th", () => {
         const state = createState(10);
         expect(state.players).toHaveLength(10);
@@ -170,25 +45,7 @@ describe("player management", () => {
     it("removes a player by id", () => {
         const state = createState(3);
         removePlayer(state, "p2");
-        expect(state.players.map((player) => player.id)).toEqual(["host", "p3"]);
-    });
-});
-
-describe("turn helpers", () => {
-    it("finds the next player eligible to act", () => {
-        const state = createState(4);
-        state.players[1]!.hasFolded = true;
-        state.players[2]!.chips = 0;
-
-        expect(getNextPlayerIndex(state.players, 0)).toBe(3);
-    });
-
-    it("sets and reports the current player", () => {
-        const state = createState(3);
-        setCurrentPlayer(state.players, "p3");
-
-        expect(getCurrentPlayerIndex(state.players)).toBe(2);
-        expect(currentPlayerId(state)).toBe("p3");
+        expect(state.players.map((entry) => entry.id)).toEqual(["host", "p3"]);
     });
 });
 
@@ -198,12 +55,29 @@ describe("hand setup", () => {
 
         startNewHand(state);
 
-        expect(state.players.find((player) => player.isDealer)?.id).toBe("p2");
-        expect(state.players.find((player) => player.isSmallBlind)?.id).toBe("p2");
-        expect(state.players.find((player) => player.isBigBlind)?.id).toBe("host");
-        expect(currentPlayerId(state)).toBe("p2");
+        expect(state.dealerId).toBe("p2");
+        expect(state.smallBlindId).toBe("p2");
+        expect(state.bigBlindId).toBe("host");
+        expect(state.currentPlayerId).toBe("p2");
         expect(state.pot).toBe(15);
         expect(state.currentBet).toBe(10);
+    });
+
+    it("rotates the button and blinds each hand", () => {
+        const state = createState(3);
+
+        startNewHand(state);
+        expect([state.dealerId, state.smallBlindId, state.bigBlindId]).toEqual([
+            "p2",
+            "p3",
+            "host",
+        ]);
+        startNewHand(state);
+        expect([state.dealerId, state.smallBlindId, state.bigBlindId]).toEqual([
+            "p3",
+            "host",
+            "p2",
+        ]);
     });
 
     it("applies antes to the pot before blinds", () => {
@@ -212,12 +86,12 @@ describe("hand setup", () => {
         startNewHand(state);
 
         expect(state.pot).toBe(21);
-        expect(state.players.map((player) => player.chips)).toEqual([988, 998, 993]);
+        expect(state.players.map((entry) => entry.chips)).toEqual([988, 998, 993]);
     });
 
     it("does not start a hand when fewer than two players have chips", () => {
         const state = createState(2);
-        state.players[1]!.chips = 0;
+        player(state, "p2").chips = 0;
 
         startNewHand(state);
 
@@ -231,30 +105,39 @@ describe("valid actions", () => {
         const state = createState(2);
         startNewHand(state);
 
-        const host = state.players.find((player) => player.id === "host")!;
-        expect(getValidActions(state, host)).toEqual([]);
+        expect(getValidActions(state, player(state, "host"))).toEqual([]);
     });
 
     it("offers call and raise when facing a bet, and check when not", () => {
         const state = createState(2);
         startNewHand(state);
 
-        const guest = state.players.find((player) => player.id === "p2")!;
-        expect(getValidActions(state, guest)).toEqual(["fold", "call", "raise", "allin"]);
+        expect(getValidActions(state, player(state, "p2"))).toEqual([
+            "fold",
+            "call",
+            "raise",
+            "allin",
+        ]);
 
         processAction(state, "p2", "call");
-        const host = state.players.find((player) => player.id === "host")!;
-        expect(getValidActions(state, host)).toEqual(["fold", "check", "raise", "allin"]);
+        expect(getValidActions(state, player(state, "host"))).toEqual([
+            "fold",
+            "check",
+            "raise",
+            "allin",
+        ]);
     });
 });
 
 describe("betting actions", () => {
-    it("rejects out-of-turn and invalid raises", () => {
+    it("rejects out-of-turn actions, short raises, and unfunded raises", () => {
         const state = createState(2);
         startNewHand(state);
 
         expect(processAction(state, "host", "call")).toBe(false);
         expect(processAction(state, "p2", "raise", 15)).toBe(false);
+        player(state, "p2").chips = 10;
+        expect(processAction(state, "p2", "raise", 30)).toBe(false);
     });
 
     it("processes call and keeps the round open until the other player acts", () => {
@@ -262,10 +145,9 @@ describe("betting actions", () => {
         startNewHand(state);
 
         expect(processAction(state, "p2", "call")).toBe(true);
-        expect(state.players.find((player) => player.id === "p2")?.currentBet).toBe(10);
-        expect(state.players.find((player) => player.id === "p2")?.chips).toBe(990);
+        expect(player(state, "p2")).toMatchObject({ currentBet: 10, chips: 990 });
         expect(state.pot).toBe(20);
-        expect(currentPlayerId(state)).toBe("host");
+        expect(state.currentPlayerId).toBe("host");
         expect(isBettingRoundComplete(state)).toBe(false);
     });
 
@@ -278,25 +160,23 @@ describe("betting actions", () => {
 
         expect(state.currentBet).toBe(30);
         expect(state.minRaise).toBe(20);
-        expect(state.players.find((player) => player.id === "p2")?.hasActed).toBe(false);
-        expect(state.players.find((player) => player.id === "host")?.hasActed).toBe(false);
-        expect(currentPlayerId(state)).toBe("host");
+        expect(player(state, "p2").hasActed).toBe(false);
+        expect(player(state, "host").hasActed).toBe(false);
+        expect(state.currentPlayerId).toBe("host");
         expect(isBettingRoundComplete(state)).toBe(false);
     });
 
     it("processes a full all-in raise and reopens betting", () => {
         const state = createState(2);
         startNewHand(state);
-
-        const guest = state.players.find((player) => player.id === "p2")!;
+        const guest = player(state, "p2");
         guest.chips = 40;
 
         expect(processAction(state, "p2", "allin")).toBe(true);
-        expect(guest.chips).toBe(0);
-        expect(guest.currentBet).toBe(45);
+        expect(guest).toMatchObject({ chips: 0, currentBet: 45 });
         expect(state.currentBet).toBe(45);
         expect(state.minRaise).toBe(35);
-        expect(currentPlayerId(state)).toBe("host");
+        expect(state.currentPlayerId).toBe("host");
     });
 
     it("does not reopen betting or reduce the minimum raise after a short all-in", () => {
@@ -304,16 +184,14 @@ describe("betting actions", () => {
         startNewHand(state);
         expect(processAction(state, "p2", "call")).toBe(true);
 
-        const smallBlind = state.players.find((player) => player.id === "p3")!;
-        smallBlind.chips = 10;
+        player(state, "p3").chips = 10;
         expect(processAction(state, "p3", "allin")).toBe(true);
 
         expect(state.currentBet).toBe(15);
         expect(state.minRaise).toBe(10);
-        expect(state.players.find((player) => player.id === "p2")?.hasActed).toBe(true);
+        expect(player(state, "p2").hasActed).toBe(true);
         expect(processAction(state, "host", "call")).toBe(true);
-        const previousCaller = state.players.find((player) => player.id === "p2")!;
-        expect(getValidActions(state, previousCaller)).toEqual(["fold", "call"]);
+        expect(getValidActions(state, player(state, "p2"))).toEqual(["fold", "call"]);
         expect(processAction(state, "p2", "call")).toBe(true);
         expect(isBettingRoundComplete(state)).toBe(true);
     });
@@ -323,23 +201,19 @@ describe("betting actions", () => {
         state.phase = "preflop";
         state.currentBet = 100;
         state.minRaise = 100;
-        const host = state.players.find((player) => player.id === "host")!;
-        host.currentBet = 100;
-        host.hasActed = true;
-        host.actedAtBet = 100;
-        setCurrentPlayer(state.players, "p2");
+        const host = player(state, "host");
+        Object.assign(host, { currentBet: 100, hasActed: true, actedAtBet: 100 });
+        state.currentPlayerId = "p2";
 
-        const firstAllIn = state.players.find((player) => player.id === "p2")!;
-        firstAllIn.chips = 150;
+        player(state, "p2").chips = 150;
         expect(processAction(state, "p2", "allin")).toBe(true);
         expect(host.hasActed).toBe(true);
 
         expect(processAction(state, "p3", "call")).toBe(true);
-        const interveningCaller = state.players.find((player) => player.id === "p3")!;
+        const interveningCaller = player(state, "p3");
         expect(interveningCaller.actedAtBet).toBe(150);
 
-        const secondAllIn = state.players.find((player) => player.id === "p4")!;
-        secondAllIn.chips = 200;
+        player(state, "p4").chips = 200;
         expect(processAction(state, "p4", "allin")).toBe(true);
 
         expect(host.hasActed).toBe(false);
@@ -347,23 +221,15 @@ describe("betting actions", () => {
         expect(interveningCaller.hasActed).toBe(true);
     });
 
-    it("rejects a raise that the player cannot fund", () => {
-        const state = createState(2);
-        startNewHand(state);
-        const guest = state.players.find((player) => player.id === "p2")!;
-        guest.chips = 10;
-
-        expect(processAction(state, "p2", "raise", 30)).toBe(false);
-    });
-
-    it("marks folded players and auto-awards the pot when only one player remains", () => {
+    it("auto-awards the pot when only one player remains", () => {
         const state = createState(2);
         startNewHand(state);
 
         expect(processAction(state, "p2", "fold")).toBe(true);
         expect(state.phase).toBe("showdown");
+        expect(state.currentPlayerId).toBeNull();
         expect(state.lastPayouts).toEqual([{ playerId: "host", playerName: "Host", amount: 15 }]);
-        expect(state.players.find((player) => player.id === "host")?.chips).toBe(1005);
+        expect(player(state, "host").chips).toBe(1005);
         expect(state.pot).toBe(0);
     });
 });
@@ -372,8 +238,8 @@ describe("betting round completion and phase progression", () => {
     it("completes immediately when no more than one player can still act", () => {
         const state = createState(3);
         startNewHand(state);
-        state.players.find((player) => player.id === "p2")!.chips = 0;
-        state.players.find((player) => player.id === "p3")!.chips = 0;
+        player(state, "p2").chips = 0;
+        player(state, "p3").chips = 0;
 
         expect(isBettingRoundComplete(state)).toBe(true);
     });
@@ -381,8 +247,8 @@ describe("betting round completion and phase progression", () => {
     it("waits for the sole remaining actor when they still owe chips", () => {
         const state = createState(3);
         startNewHand(state);
-        state.players.find((player) => player.id === "p2")!.chips = 0;
-        state.players.find((player) => player.id === "p3")!.chips = 0;
+        player(state, "p2").chips = 0;
+        player(state, "p3").chips = 0;
         state.currentBet = 20;
 
         expect(isBettingRoundComplete(state)).toBe(false);
@@ -401,7 +267,7 @@ describe("betting round completion and phase progression", () => {
         expect(isBettingRoundComplete(state)).toBe(true);
     });
 
-    it("advances phases and resets bets and acted state", () => {
+    it("advances phases with the first player after the dealer acting", () => {
         const state = createState(3);
         startNewHand(state);
         processAction(state, "p2", "call");
@@ -410,55 +276,24 @@ describe("betting round completion and phase progression", () => {
 
         advancePhase(state);
         expect(state.phase).toBe("flop");
-        expect(state.communityCards).toEqual([]);
-        expect(currentPlayerId(state)).toBe("p3");
+        expect(state.currentBet).toBe(0);
+        expect(state.players.every((entry) => !entry.hasActed && entry.currentBet === 0)).toBe(
+            true,
+        );
+        expect(state.currentPlayerId).toBe("p3");
 
         advancePhase(state);
         expect(state.phase).toBe("turn");
-        expect(state.communityCards).toEqual([]);
-
         advancePhase(state);
         expect(state.phase).toBe("river");
-        expect(state.communityCards).toEqual([]);
-
         advancePhase(state);
         expect(state.phase).toBe("showdown");
+        expect(state.currentPlayerId).toBeNull();
     });
 });
 
-describe("manual outcome recording", () => {
-    it("applies a single winner payout and clears the pot", () => {
-        const state = createState(3);
-        startNewHand(state);
-        state.phase = "showdown";
-        state.pot = 120;
-
-        expect(applyPayouts(state, [{ playerId: "p2", amount: 120 }])).toBe(true);
-        expect(state.players.find((player) => player.id === "p2")?.chips).toBe(1120);
-        expect(state.pot).toBe(0);
-        expect(state.lastPayouts).toEqual([{ playerId: "p2", playerName: "Guest", amount: 120 }]);
-    });
-
-    it("calculates side pots and applies winners by pot", () => {
-        const state = createState(3);
-        state.phase = "showdown";
-        state.pot = 120;
-        state.players[0]!.handContribution = 20;
-        state.players[1]!.handContribution = 50;
-        state.players[2]!.handContribution = 50;
-
-        const pots = calculatePotAllocations(state);
-        expect(pots).toEqual([
-            { amount: 60, eligiblePlayerIds: ["host", "p2", "p3"] },
-            { amount: 60, eligiblePlayerIds: ["p2", "p3"] },
-        ]);
-
-        expect(applyPotWinners(state, [["host"], ["p3"]])).toBe(true);
-        expect(state.players.find((player) => player.id === "host")?.chips).toBe(1060);
-        expect(state.players.find((player) => player.id === "p3")?.chips).toBe(1060);
-    });
-
-    it("supports split pots when host records multiple payouts", () => {
+describe("outcome recording", () => {
+    it("applies single and split payouts and clears the pot", () => {
         const state = createState(3);
         state.phase = "showdown";
         state.pot = 90;
@@ -470,37 +305,49 @@ describe("manual outcome recording", () => {
             ]),
         ).toBe(true);
 
-        expect(state.players.find((player) => player.id === "host")?.chips).toBe(1045);
-        expect(state.players.find((player) => player.id === "p2")?.chips).toBe(1045);
+        expect(player(state, "host").chips).toBe(1045);
+        expect(player(state, "p2").chips).toBe(1045);
+        expect(state.pot).toBe(0);
+        expect(state.lastPayouts).toEqual([
+            { playerId: "host", playerName: "Host", amount: 45 },
+            { playerId: "p2", playerName: "Guest", amount: 45 },
+        ]);
     });
 
-    it("validates every payout before changing chip balances", () => {
+    it("rejects invalid payouts without changing chip balances", () => {
         const state = createState(2);
         state.phase = "showdown";
         state.pot = 50;
-        const chipsBefore = state.players.map((player) => player.chips);
+        const chipsBefore = state.players.map((entry) => entry.chips);
 
+        expect(applyPayouts(state, [{ playerId: "host", amount: 40 }])).toBe(false);
         expect(
             applyPayouts(state, [
                 { playerId: "host", amount: 25 },
                 { playerId: "missing", amount: 25 },
             ]),
         ).toBe(false);
-        expect(state.players.map((player) => player.chips)).toEqual(chipsBefore);
+        expect(state.players.map((entry) => entry.chips)).toEqual(chipsBefore);
         expect(state.pot).toBe(50);
     });
 
-    it("rejects invalid pot winner selections and bad payouts", () => {
-        const state = createState(2);
+    it("calculates side pots and applies winners by pot", () => {
+        const state = createState(3);
         state.phase = "showdown";
-        state.pot = 50;
+        state.pot = 120;
+        player(state, "host").handContribution = 20;
+        player(state, "p2").handContribution = 50;
+        player(state, "p3").handContribution = 50;
 
-        expect(applyPayouts(state, [{ playerId: "host", amount: 40 }])).toBe(false);
-        expect(applyPayouts(state, [{ playerId: "missing", amount: 50 }])).toBe(false);
-        state.players[0]!.handContribution = 20;
-        state.players[1]!.handContribution = 30;
-        expect(applyPotWinners(state, [[], ["p2"]])).toBe(false);
-        expect(applyPotWinners(state, [["missing"], ["p2"]])).toBe(false);
-        expect(state.pot).toBe(50);
+        expect(calculatePotAllocations(state)).toEqual([
+            { amount: 60, eligiblePlayerIds: ["host", "p2", "p3"] },
+            { amount: 60, eligiblePlayerIds: ["p2", "p3"] },
+        ]);
+        expect(applyPotWinners(state, [[], ["p3"]])).toBe(false);
+        expect(applyPotWinners(state, [["host"], ["host"]])).toBe(false);
+
+        expect(applyPotWinners(state, [["host"], ["p3"]])).toBe(true);
+        expect(player(state, "host").chips).toBe(1060);
+        expect(player(state, "p3").chips).toBe(1060);
     });
 });

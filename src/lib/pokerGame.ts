@@ -9,6 +9,7 @@ import {
     removePlayer,
     startNewHand,
 } from "./gameLogic";
+import { communityCardsAfter, isValidCard } from "./poker";
 import type { Card, GameConfig, GameState, PlayerAction, RevealedHand } from "./types";
 
 export interface PokerGameConfig {
@@ -150,7 +151,7 @@ function transitionPokerState(
         case "remove-player": {
             if (!context.trusted) return { accepted: false, reason: "unauthorized" };
             const player = state.players.find((entry) => entry.id === command.playerId);
-            if (state.phase !== "waiting" || !player || player.isHost) {
+            if (state.phase !== "waiting" || !player || player.id === state.hostId) {
                 return { accepted: false, reason: "invalid-action" };
             }
             removePlayer(nextState, command.playerId);
@@ -226,10 +227,9 @@ function isValidPhaseAdvance(
         turn: 4,
         river: 5,
     }[state.phase];
-    const expectedDrawCount = state.phase === "preflop" ? 3 : state.phase === "river" ? 0 : 1;
     if (
         state.communityCards.length !== expectedCommunityCards ||
-        command.cards.length !== expectedDrawCount ||
+        command.cards.length !== communityCardsAfter(state.phase) ||
         !hasUniqueValidCards([...state.communityCards, ...command.cards])
     ) {
         return false;
@@ -267,10 +267,7 @@ function hasValidRevealedHands(state: GameState, hands: readonly RevealedHand[])
 }
 
 function hasUniqueValidCards(cards: readonly Card[]): boolean {
-    return (
-        cards.every((card) => /^[2-9TJQKA][cdhs]$/.test(card)) &&
-        new Set(cards).size === cards.length
-    );
+    return cards.every(isValidCard) && new Set(cards).size === cards.length;
 }
 
 function validatePokerGameConfig(config: PokerGameConfig): void {
